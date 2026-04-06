@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+
+# Data and Logs
+data/
+*.txt
+!requirements.txt
+*.log
+
+# Checkpoints
+*.pt
+*.pth
+*.ckpt
