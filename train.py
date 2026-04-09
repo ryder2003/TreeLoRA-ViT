@@ -3,21 +3,25 @@ train.py
 --------
 Top-level training script for TreeLoRA + ViT-B/16 continual learning.
 
+Before running for imagenet_r or cub200, download datasets with:
+    python download_datasets.py
+
 Usage examples:
-    # Full Split CIFAR-100 run (10 tasks, 5 epochs each)
+    # Full Split CIFAR-100 (10 tasks, 5 epochs each)
     python train.py --dataset cifar100 --n_tasks 10 --epochs 5
 
-    # Quick smoke test (2 tasks, 1 epoch, small batch)
+    # Quick smoke test (2 tasks, 1 epoch, small batch, no pretrained weights)
     python train.py --dataset cifar100 --n_tasks 2 --epochs 1 --batch_size 16 --no_pretrained
 
-    # Split ImageNet-R (requires manual download)
+    # Split ImageNet-R (20 tasks × 10 classes)  — requires download_datasets.py
     python train.py --dataset imagenet_r --n_tasks 20 --epochs 5
 
-    # Split CUB-200 (requires manual download)
+    # Split CUB-200  (10 tasks × 20 classes)    — requires download_datasets.py
     python train.py --dataset cub200 --n_tasks 10 --epochs 5
 """
 
 import argparse
+import os
 import time
 import torch
 
@@ -25,16 +29,16 @@ from datasets import get_split_cifar100, get_split_imagenet_r, get_split_cub200
 from continual_learner import TreeLoRALearner
 
 
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Argument parser
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser(
         description="TreeLoRA ViT Continual Learning (ViT-B/16, paper reproduction)"
     )
 
-    # Dataset
+    # ── Dataset ───────────────────────────────────────────────────────────────
     p.add_argument(
         "--dataset", type=str, default="cifar100",
         choices=["cifar100", "imagenet_r", "cub200"],
@@ -42,20 +46,22 @@ def parse_args():
     )
     p.add_argument(
         "--data_root", type=str, default="./data",
-        help="Root directory for datasets",
+        help="Root directory for all datasets (default: ./data). "
+             "Sub-folders (imagenet-r/, CUB_200_2011/) are created by download_datasets.py.",
     )
     p.add_argument(
-        "--n_tasks",  type=int, default=10,
-        help="Number of continual learning tasks (default: 10)",
+        "--n_tasks", type=int, default=None,
+        help="Number of continual-learning tasks. "
+             "Defaults: cifar100=10, imagenet_r=20, cub200=10.",
     )
 
-    # Model
+    # ── Model ─────────────────────────────────────────────────────────────────
     p.add_argument(
         "--no_pretrained", action="store_true",
         help="Do NOT load ImageNet-21k pretrained weights (for fast smoke tests)",
     )
 
-    # LoRA
+    # ── LoRA ──────────────────────────────────────────────────────────────────
     p.add_argument(
         "--lora_rank",  type=int,   default=4,
         help="LoRA rank r (paper default: 4)",
@@ -66,78 +72,95 @@ def parse_args():
     )
     p.add_argument(
         "--lora_depth", type=int, default=5,
-        help="KD-tree depth = number of LoRA layers used in the tree (paper: 5)",
+        help="KD-tree depth = number of LoRA layers used (paper: 5)",
     )
 
-    # Regularisation
+    # ── Regularisation ────────────────────────────────────────────────────────
     p.add_argument(
         "--reg", type=float, default=0.5,
-        help="Regularisation strength λ (paper default: 0.5, 0 = no TreeLoRA reg)",
+        help="Regularisation strength λ (paper default: 0.5; 0 = disable TreeLoRA reg)",
     )
 
-    # Training
-    p.add_argument("--epochs",     type=int,   default=5,    help="Epochs per task")
-    p.add_argument("--batch_size", type=int,   default=64,   help="Batch size")
-    p.add_argument("--lr",         type=float, default=5e-3, help="Learning rate (paper range: [0.003, 0.007])")
-    p.add_argument("--num_workers",type=int,   default=4,    help="DataLoader workers")
+    # ── Training ──────────────────────────────────────────────────────────────
+    p.add_argument("--epochs",      type=int,   default=5,    help="Epochs per task")
+    p.add_argument("--batch_size",  type=int,   default=64,   help="Batch size")
+    p.add_argument("--lr",          type=float, default=5e-3,
+                   help="Learning rate (paper range: [0.003, 0.007])")
+    p.add_argument("--num_workers", type=int,   default=4,
+                   help="DataLoader worker processes (set 0 on Windows if you get multiprocessing errors)")
 
     return p.parse_args()
 
 
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Dataset defaults per benchmark
+# ──────────────────────────────────────────────────────────────────────────────
+
+DATASET_DEFAULTS = {
+    "cifar100":    {"n_tasks": 10, "total_classes": 100},
+    "imagenet_r":  {"n_tasks": 20, "total_classes": 200},
+    "cub200":      {"n_tasks": 10, "total_classes": 200},
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 
 def main():
     args = parse_args()
 
+    # Fill in defaults
+    defaults = DATASET_DEFAULTS[args.dataset]
+    if args.n_tasks is None:
+        args.n_tasks = defaults["n_tasks"]
+    total_classes    = defaults["total_classes"]
+    classes_per_task = total_classes // args.n_tasks
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     print(f"\n{'='*60}")
-    print(f"  TreeLoRA ViT-B/16  ─  {args.dataset.upper()}")
-    print(f"  Device : {device}")
-    print(f"  Tasks  : {args.n_tasks}")
-    print(f"  Epochs : {args.epochs}")
-    print(f"  LoRA   : rank={args.lora_rank}  alpha={args.lora_alpha}  "
+    print(f"  TreeLoRA ViT-B/16 -- {args.dataset.upper()}")
+    print(f"  Device       : {device}")
+    print(f"  Data root    : {os.path.abspath(args.data_root)}")
+    print(f"  Tasks        : {args.n_tasks}  ({classes_per_task} classes each)")
+    print(f"  Epochs/task  : {args.epochs}")
+    print(f"  Batch size   : {args.batch_size}")
+    print(f"  LR           : {args.lr}")
+    print(f"  LoRA         : rank={args.lora_rank}  alpha={args.lora_alpha}  "
           f"scaling={args.lora_alpha/args.lora_rank:.1f}")
-    print(f"  Tree   : depth={args.lora_depth}  reg={args.reg}")
+    print(f"  Tree         : depth={args.lora_depth}  reg={args.reg}")
+    print(f"  Pretrained   : {not args.no_pretrained}")
     print(f"{'='*60}\n")
 
-    # ------------------------------------------------------------------
-    # Build dataset
-    # ------------------------------------------------------------------
+    # ── Build dataset ──────────────────────────────────────────────────────────
+    # All loaders accept `data_root` and manage sub-paths internally.
+    loader_kwargs = dict(
+        data_root=args.data_root,
+        n_tasks=args.n_tasks,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+    )
+
     if args.dataset == "cifar100":
-        classes_per_task = 100 // args.n_tasks
-        task_dataloaders, class_splits = get_split_cifar100(
-            data_root=args.data_root,
-            n_tasks=args.n_tasks,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-        )
+        task_dataloaders, class_splits = get_split_cifar100(**loader_kwargs)
+
     elif args.dataset == "imagenet_r":
-        classes_per_task = 200 // args.n_tasks
-        task_dataloaders, class_splits = get_split_imagenet_r(
-            data_root=args.data_root,
-            n_tasks=args.n_tasks,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-        )
+        task_dataloaders, class_splits = get_split_imagenet_r(**loader_kwargs)
+
     elif args.dataset == "cub200":
-        classes_per_task = 200 // args.n_tasks
-        task_dataloaders, class_splits = get_split_cub200(
-            data_root=args.data_root,
-            n_tasks=args.n_tasks,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-        )
+        task_dataloaders, class_splits = get_split_cub200(**loader_kwargs)
+
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
 
-    print(f"Dataset ready: {args.n_tasks} tasks, "
-          f"{classes_per_task} classes/task\n")
+    # Quick sanity check
+    n_tr = len(task_dataloaders[0][0].dataset)
+    n_te = len(task_dataloaders[0][1].dataset)
+    print(f"Dataset ready: {args.n_tasks} tasks | "
+          f"Task-0 has {n_tr} train / {n_te} eval samples\n")
 
-    # ------------------------------------------------------------------
-    # Build learner
-    # ------------------------------------------------------------------
+    # ── Build learner ──────────────────────────────────────────────────────────
     learner = TreeLoRALearner(
         num_tasks=args.n_tasks,
         classes_per_task=classes_per_task,
@@ -152,9 +175,7 @@ def main():
 
     learner.model.print_trainable_summary()
 
-    # ------------------------------------------------------------------
-    # Run continual learning
-    # ------------------------------------------------------------------
+    # ── Run continual learning ─────────────────────────────────────────────────
     t0 = time.time()
     acc_matrix, final_acc, bwt = learner.run(
         task_dataloaders=task_dataloaders,
@@ -162,20 +183,18 @@ def main():
     )
     elapsed = time.time() - t0
 
-    # ------------------------------------------------------------------
-    # Summary table
-    # ------------------------------------------------------------------
-    print("\nAccuracy Matrix (rows=after task T, cols=task evaluated):")
-    header = "       " + "  ".join(f"T{j:02d}" for j in range(args.n_tasks))
+    # ── Summary table ──────────────────────────────────────────────────────────
+    print("\nAccuracy Matrix (rows = after training task T, cols = task evaluated):")
+    header = "         " + "  ".join(f"T{j:02d}" for j in range(args.n_tasks))
     print(header)
     for i, row in enumerate(acc_matrix):
-        cells = "  ".join(f"{v:5.1f}" for v in row)
+        cells   = "  ".join(f"{v:5.1f}" for v in row)
         padding = "  ".join("  ---" for _ in range(args.n_tasks - len(row)))
-        print(f"  T{i:02d}: {cells}  {padding}")
+        print(f"  T{i:02d}:  {cells}  {padding}")
 
     print(f"\n  Average Accuracy (Acc) : {final_acc:.2f}%")
     print(f"  Backward Transfer (BWT): {bwt:.2f}%")
-    print(f"  Total training time    : {elapsed:.1f}s\n")
+    print(f"  Total training time    : {elapsed/60:.1f} min  ({elapsed:.0f}s)\n")
 
 
 if __name__ == "__main__":
