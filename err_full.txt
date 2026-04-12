@@ -1,0 +1,28 @@
+﻿python : Traceback 
+(most recent call 
+last):
+At line:1 char:1
++ python -c "import 
+traceback; exec(open('c
+:/TreeLoRa/test_quick.p
+y').r ...
++ ~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~
+~~
+    + CategoryInfo     
+         : NotSpecifi  
+  ed: (Traceback (mo   
+ st recent call las    
+t)::String) [], Re    
+moteException
+    + FullyQualifiedEr 
+   rorId : NativeComm  
+  andError
+ 
+  File "<string>", 
+line 1, in <module>
+FileNotFoundError: 
+[Errno 2] No such file 
+or directory: 'c:/TreeL
+oRa/test_quick.py'

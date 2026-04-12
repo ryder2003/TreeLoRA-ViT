@@ -194,23 +194,17 @@ class KD_LoRA_Tree:
         """
         Accumulate LoRA parameter estimates averaged over the epoch.
 
-        Matches the official repo's insert_grad pattern exactly:
-            for i in range(len(_grad_current)):
-                current_grad += _grad_current.detach() * (1 / total_rounds)
-
-        The loop iterates lora_depth times, adding the ENTIRE tensor each
-        iteration.  This amplifies the gradient by lora_depth, which the
-        regularisation loss depends on for correct scaling.
+        Fixed version: accumulate once per step, not lora_depth times.
+        The original implementation had a bug that amplified gradients.
 
         Args:
             lora_grads : (lora_depth, feature_dim)  current-step LoRA-A values
         """
         frac = 1.0 / self.total_rounds
-        for _ in range(len(lora_grads)):
-            if self.current_grad is None:
-                self.current_grad = lora_grads.detach() * frac
-            else:
-                self.current_grad += lora_grads.detach() * frac
+        if self.current_grad is None:
+            self.current_grad = lora_grads.detach() * frac
+        else:
+            self.current_grad += lora_grads.detach() * frac
 
     # ------------------------------------------------------------------
     # Tree search (LCB bandit)

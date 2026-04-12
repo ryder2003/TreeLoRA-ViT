@@ -4,23 +4,31 @@ __pycache__/
 *$py.class
 *.so
 .Python
-
-# Virtual Environment
 venv/
 env/
-.venv/
+*.egg-info/
 
-# IDEs
+# Data
+data/
+*.tar.gz
+*.zip
+
+# Large checkpoint files (keep only JSON/txt results)
+runs/**/*.pt
+runs/**/*.pth
+runs/**/*.ckpt
+
+# Keep JSON and text results
+!runs/**/*.json
+!runs/**/*.txt
+!runs/**/*.png
+
+# IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Data and Logs
-data/
-*.txt
-!requirements.txt
-*.log
-
-# Checkpoints
-*.pt
-*.pth
-*.ckpt
+# OS
+.DS_Store
+Thumbs.db

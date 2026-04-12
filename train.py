@@ -80,8 +80,8 @@ def parse_args():
 
     # ── Regularisation ────────────────────────────────────────────────────────
     p.add_argument(
-        "--reg", type=float, default=0.5,
-        help="Regularisation strength (paper default: 0.5; 0 = disable TreeLoRA reg)",
+        "--reg", type=float, default=1.0,
+        help="Regularisation strength (paper default: 0.5-1.0; 0 = disable TreeLoRA reg)",
     )
 
     # ── Training ──────────────────────────────────────────────────────────────

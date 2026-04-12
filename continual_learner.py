@@ -180,13 +180,12 @@ class TreeLoRALearner:
         ckpt_dir = os.path.join(self.output_dir, f"task_{task_id}")
         os.makedirs(ckpt_dir, exist_ok=True)
 
-        # 1. Save LoRA parameters
-        lora_state = {
-            name: param.cpu().clone()
-            for name, param in self.model.named_parameters()
-            if "loranew_" in name
+        # 1. Save ALL model parameters including LoRA
+        model_state = {
+            k: v.cpu().clone()
+            for k, v in self.model.state_dict().items()
         }
-        torch.save(lora_state, os.path.join(ckpt_dir, "lora_weights.pt"))
+        torch.save(model_state, os.path.join(ckpt_dir, "model_state.pt"))
 
         # 2. Save all task heads
         heads_state = {
@@ -216,6 +215,22 @@ class TreeLoRALearner:
             json.dump(self.training_log, f, indent=2)
 
         print(f"  [saved] Checkpoint -> {ckpt_dir}")
+
+    def load_checkpoint(self, task_id: int):
+        """Load model state from a checkpoint."""
+        if not self.output_dir:
+            return False
+
+        ckpt_dir = os.path.join(self.output_dir, f"task_{task_id}")
+        model_path = os.path.join(ckpt_dir, "model_state.pt")
+        
+        if not os.path.exists(model_path):
+            return False
+
+        model_state = torch.load(model_path, map_location=self.device)
+        self.model.load_state_dict(model_state)
+        print(f"  [loaded] Checkpoint from {ckpt_dir}")
+        return True
 
     def save_final_results(self, final_acc: float, bwt: float, elapsed: float):
         """Save a comprehensive final results summary."""
@@ -287,10 +302,8 @@ class TreeLoRALearner:
         print(f"  Training Task {task_id}  ({len(train_loader.dataset)} samples)")
         print(f"{'='*60}")
 
-        # ── Re-initialise LoRA adapters for fresh per-task learning ──
-        # This is CRITICAL: each task learns new LoRA deltas from the
-        # frozen pretrained backbone.  The tree regularisation handles
-        # knowledge transfer via gradient alignment.
+        # Reset LoRA adapters for EVERY task (paper requirement)
+        # Each task learns fresh deltas; tree regularization handles transfer
         reset_all_lora(self.model)
 
         self._set_task_head(task_id)
@@ -341,7 +354,7 @@ class TreeLoRALearner:
                 # -------------------------------------------------------
                 # TreeLoRA regularisation (matches official Tree_LoRA.py)
                 # -------------------------------------------------------
-                if self.reg > 0:
+                if self.reg > 0 and task_id > 0:
                     # Collect live LoRA-A parameters (differentiable)
                     lora_A_params = self._collect_lora_A_live()
 
@@ -354,16 +367,23 @@ class TreeLoRALearner:
                         # Insert detached copy for tree's gradient tracking
                         self.tree.insert_grad(_grad_current.detach())
 
-                        # Compute regularisation if we have previous tasks
-                        if task_id > 0:
-                            prev_id_matrix = self.tree.tree_search(
-                                task_id, self.device
-                            )
-                            reg_loss = self.tree.get_loss(
-                                _grad_current, loss, task_id, prev_id_matrix
-                            )
-                            # Official pattern: loss = loss - reg_loss
-                            loss = loss - reg_loss
+                        # Compute regularisation for previous tasks
+                        prev_id_matrix = self.tree.tree_search(
+                            task_id, self.device
+                        )
+                        reg_loss = self.tree.get_loss(
+                            _grad_current, loss, task_id, prev_id_matrix
+                        )
+                        # Official pattern: loss = loss - reg_loss
+                        loss = loss - reg_loss
+                elif self.reg > 0 and task_id == 0:
+                    # For first task, still collect gradients but no regularization
+                    lora_A_params = self._collect_lora_A_live()
+                    if lora_A_params is not None:
+                        _grad_current = torch.stack(
+                            [p.reshape(-1) for p in lora_A_params], dim=0
+                        )
+                        self.tree.insert_grad(_grad_current.detach())
 
                 # Single backward pass
                 loss.backward()
