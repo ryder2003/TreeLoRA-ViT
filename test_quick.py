@@ -32,8 +32,8 @@ try:
 
     print(f"\nFinal Acc: {final_acc:.2f}%")
     print(f"BWT: {bwt:.2f}%")
-    print("\n✓ SMOKE TEST PASSED")
+    print("\n[OK] SMOKE TEST PASSED")
 
 except Exception as e:
     traceback.print_exc()
-    print("\n✗ SMOKE TEST FAILED")
+    print("\n[FAIL] SMOKE TEST FAILED")

@@ -194,17 +194,23 @@ class KD_LoRA_Tree:
         """
         Accumulate LoRA parameter estimates averaged over the epoch.
 
-        Matches the official repo's insert_grad pattern:
-            current_grad += _grad_current.detach() * (1 / total_rounds)
+        Matches the official repo's insert_grad pattern exactly:
+            for i in range(len(_grad_current)):
+                current_grad += _grad_current.detach() * (1 / total_rounds)
+
+        The loop iterates lora_depth times, adding the ENTIRE tensor each
+        iteration.  This amplifies the gradient by lora_depth, which the
+        regularisation loss depends on for correct scaling.
 
         Args:
             lora_grads : (lora_depth, feature_dim)  current-step LoRA-A values
         """
         frac = 1.0 / self.total_rounds
-        if self.current_grad is None:
-            self.current_grad = lora_grads.detach() * frac
-        else:
-            self.current_grad += lora_grads.detach() * frac
+        for _ in range(len(lora_grads)):
+            if self.current_grad is None:
+                self.current_grad = lora_grads.detach() * frac
+            else:
+                self.current_grad += lora_grads.detach() * frac
 
     # ------------------------------------------------------------------
     # Tree search (LCB bandit)
@@ -320,9 +326,12 @@ class KD_LoRA_Tree:
             lora_grads, self.all_grad_device, task_id, prev_id_matrix
         )
         # Adaptive scaling so regularisation is on the same scale as task loss
+        # Official pattern: reg_loss / (reg_loss.detach().clone() + 1e-5) * loss.detach().clone() * tmp_reg
+        # Using .clone() preserves sign, which is critical for
+        # correct regularisation direction.
         reg_loss = (
-            reg_loss / (reg_loss.detach().abs() + 1e-5)
-            * task_loss.detach()
+            reg_loss / (reg_loss.detach().clone() + 1e-5)
+            * task_loss.detach().clone()
             * self.tmp_reg
         )
         return reg_loss
@@ -394,7 +403,7 @@ if __name__ == "__main__":
             tree.insert_grad(fake_grads)
         tree.end_task(t)
 
-    print("Tree construction OK ✓")
+    print("Tree construction [OK]")
     device = torch.device("cpu")
     tree.new_epoch_init(10)
     tree.step()

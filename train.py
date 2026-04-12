@@ -18,6 +18,9 @@ Usage examples:
 
     # Split CUB-200  (10 tasks × 20 classes)    — requires download_datasets.py
     python train.py --dataset cub200 --n_tasks 10 --epochs 5
+
+    # Save checkpoints and logs to output directory
+    python train.py --dataset cifar100 --output_dir ./runs/cifar100_run1
 """
 
 import argparse
@@ -68,7 +71,7 @@ def parse_args():
     )
     p.add_argument(
         "--lora_alpha", type=float, default=8.0,
-        help="LoRA alpha α (paper default: 8.0 → scaling = 2.0)",
+        help="LoRA alpha (paper default: 8.0 -> scaling = 2.0)",
     )
     p.add_argument(
         "--lora_depth", type=int, default=5,
@@ -78,7 +81,7 @@ def parse_args():
     # ── Regularisation ────────────────────────────────────────────────────────
     p.add_argument(
         "--reg", type=float, default=0.5,
-        help="Regularisation strength λ (paper default: 0.5; 0 = disable TreeLoRA reg)",
+        help="Regularisation strength (paper default: 0.5; 0 = disable TreeLoRA reg)",
     )
 
     # ── Training ──────────────────────────────────────────────────────────────
@@ -88,6 +91,19 @@ def parse_args():
                    help="Learning rate (paper range: [0.003, 0.007])")
     p.add_argument("--num_workers", type=int,   default=4,
                    help="DataLoader worker processes (set 0 on Windows if you get multiprocessing errors)")
+
+    # ── Device ────────────────────────────────────────────────────────────────
+    p.add_argument(
+        "--device", type=str, default=None,
+        help="Device to use: 'cuda', 'cuda:0', 'cpu', etc. (default: auto-detect)",
+    )
+
+    # ── Output ────────────────────────────────────────────────────────────────
+    p.add_argument(
+        "--output_dir", type=str, default=None,
+        help="Directory to save checkpoints, accuracy matrix, and training logs. "
+             "If not set, defaults to ./runs/<dataset>_<timestamp>/",
+    )
 
     return p.parse_args()
 
@@ -117,7 +133,18 @@ def main():
     total_classes    = defaults["total_classes"]
     classes_per_task = total_classes // args.n_tasks
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Device selection
+    if args.device:
+        device = torch.device(args.device)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Output directory (auto-generate if not specified)
+    if args.output_dir is None:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        args.output_dir = os.path.join("runs", f"{args.dataset}_{timestamp}")
+
+    os.makedirs(args.output_dir, exist_ok=True)
 
     print(f"\n{'='*60}")
     print(f"  TreeLoRA ViT-B/16 -- {args.dataset.upper()}")
@@ -131,7 +158,17 @@ def main():
           f"scaling={args.lora_alpha/args.lora_rank:.1f}")
     print(f"  Tree         : depth={args.lora_depth}  reg={args.reg}")
     print(f"  Pretrained   : {not args.no_pretrained}")
+    print(f"  Output dir   : {os.path.abspath(args.output_dir)}")
     print(f"{'='*60}\n")
+
+    # ── Save config ────────────────────────────────────────────────────────────
+    import json
+    config = vars(args).copy()
+    config["device"] = str(device)
+    config["total_classes"] = total_classes
+    config["classes_per_task"] = classes_per_task
+    with open(os.path.join(args.output_dir, "config.json"), "w") as f:
+        json.dump(config, f, indent=2)
 
     # ── Build dataset ──────────────────────────────────────────────────────────
     # All loaders accept `data_root` and manage sub-paths internally.
@@ -171,6 +208,7 @@ def main():
         lr=args.lr,
         device=device,
         pretrained=not args.no_pretrained,
+        output_dir=args.output_dir,
     )
 
     learner.model.print_trainable_summary()
@@ -194,7 +232,8 @@ def main():
 
     print(f"\n  Average Accuracy (Acc) : {final_acc:.2f}%")
     print(f"  Backward Transfer (BWT): {bwt:.2f}%")
-    print(f"  Total training time    : {elapsed/60:.1f} min  ({elapsed:.0f}s)\n")
+    print(f"  Total training time    : {elapsed/60:.1f} min  ({elapsed:.0f}s)")
+    print(f"  Results saved to       : {os.path.abspath(args.output_dir)}\n")
 
 
 if __name__ == "__main__":

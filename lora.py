@@ -174,6 +174,13 @@ class LoRAQKV(nn.Module):
         self.loranew_B_v = nn.Parameter(torch.zeros(self.slice, rank))
         nn.init.kaiming_uniform_(self.loranew_A_v, a=math.sqrt(5))
 
+    def reset_parameters(self):
+        """Re-initialize LoRA parameters (called at the start of each new task)."""
+        nn.init.kaiming_uniform_(self.loranew_A, a=math.sqrt(5))
+        nn.init.zeros_(self.loranew_B)
+        nn.init.kaiming_uniform_(self.loranew_A_v, a=math.sqrt(5))
+        nn.init.zeros_(self.loranew_B_v)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Original QKV  (B, N, 3*embed_dim)
         qkv = self.base_qkv(x)
@@ -195,6 +202,25 @@ def get_lora_params(model: nn.Module):
     for name, param in model.named_parameters():
         if "loranew_" in name:
             yield name, param
+
+
+def reset_all_lora(model: nn.Module):
+    """
+    Re-initialize all LoRA adapter parameters in the model.
+
+    Called at the start of each new task so that each task learns
+    fresh LoRA deltas from the frozen pretrained backbone.  The KD-tree
+    regularisation handles knowledge transfer between tasks.
+    """
+    vit = model.vit if hasattr(model, "vit") else model
+    reset_count = 0
+    for block in vit.blocks:
+        attn = block.attn
+        if hasattr(attn, "qkv") and isinstance(attn.qkv, LoRAQKV):
+            attn.qkv.reset_parameters()
+            reset_count += 1
+    if reset_count > 0:
+        print(f"  LoRA re-initialised in {reset_count} blocks")
 
 
 # ---------------------------------------------------------------------------
