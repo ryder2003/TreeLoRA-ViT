@@ -302,10 +302,10 @@ class TreeLoRALearner:
         print(f"  Training Task {task_id}  ({len(train_loader.dataset)} samples)")
         print(f"{'='*60}")
 
-        # Only reset LoRA for the FIRST task
-        # Subsequent tasks fine-tune existing LoRA weights with tree regularization
-        if task_id == 0:
-            reset_all_lora(self.model)
+        # CRITICAL: Reset LoRA for EVERY task (paper's approach)
+        # Each task learns fresh LoRA deltas from frozen backbone
+        # Tree regularization provides knowledge transfer
+        reset_all_lora(self.model)
 
         self._set_task_head(task_id)
         optimizer = self._make_optimizer()

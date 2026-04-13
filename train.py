@@ -80,15 +80,15 @@ def parse_args():
 
     # ── Regularisation ────────────────────────────────────────────────────────
     p.add_argument(
-        "--reg", type=float, default=1.0,
-        help="Regularisation strength (paper default: 0.5-1.0; 0 = disable TreeLoRA reg)",
+        "--reg", type=float, default=0.5,
+        help="Regularisation strength (paper default: 0.5-2.0; paper experiments use 0.5-1.5)",
     )
 
     # ── Training ──────────────────────────────────────────────────────────────
-    p.add_argument("--epochs",      type=int,   default=5,    help="Epochs per task")
-    p.add_argument("--batch_size",  type=int,   default=64,   help="Batch size")
-    p.add_argument("--lr",          type=float, default=5e-3,
-                   help="Learning rate (paper range: [0.003, 0.007])")
+    p.add_argument("--epochs",      type=int,   default=10,    help="Epochs per task (paper: 8-10 for better retention)")
+    p.add_argument("--batch_size",  type=int,   default=64,   help="Batch size (paper: 64 for CIFAR-100, 32 for others)")
+    p.add_argument("--lr",          type=float, default=3e-3,
+                   help="Learning rate (paper recommended: 2e-3 to 5e-3, default 3e-3)")
     p.add_argument("--num_workers", type=int,   default=4,
                    help="DataLoader worker processes (set 0 on Windows if you get multiprocessing errors)")
 
@@ -113,9 +113,9 @@ def parse_args():
 # ──────────────────────────────────────────────────────────────────────────────
 
 DATASET_DEFAULTS = {
-    "cifar100":    {"n_tasks": 10, "total_classes": 100},
-    "imagenet_r":  {"n_tasks": 20, "total_classes": 200},
-    "cub200":      {"n_tasks": 10, "total_classes": 200},
+    "cifar100":    {"n_tasks": 10, "total_classes": 100, "epochs": 10, "batch_size": 64},
+    "imagenet_r":  {"n_tasks": 20, "total_classes": 200, "epochs": 8, "batch_size": 32},
+    "cub200":      {"n_tasks": 10, "total_classes": 200, "epochs": 10, "batch_size": 32},
 }
 
 
@@ -130,6 +130,10 @@ def main():
     defaults = DATASET_DEFAULTS[args.dataset]
     if args.n_tasks is None:
         args.n_tasks = defaults["n_tasks"]
+    if args.epochs is None:
+        args.epochs = defaults["epochs"]
+    if args.batch_size is None:
+        args.batch_size = defaults["batch_size"]
     total_classes    = defaults["total_classes"]
     classes_per_task = total_classes // args.n_tasks
 

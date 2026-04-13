@@ -1,0 +1,934 @@
+arXiv:2506.10355v1  [cs.LG]  12 Jun 2025TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs
+Guided by a Hierarchical Gradient-Similarity Tree
+Yu-Yang Qian1 2Yuan-Ze Xu1 2Zhen-Yu Zhang3Peng Zhao1 2Zhi-Hua Zhou1 2
+Abstract
+Many real-world applications collect data in a
+streaming environment, where learning tasks are
+encountered sequentially. This necessitates con-
+tinual learning (CL) to update models online, en-
+abling adaptation to new tasks while preserving
+past knowledge to prevent catastrophic forgetting.
+Nowadays, with the flourish of large pre-trained
+models (LPMs), efficiency has become increas-
+ingly critical for CL, due to their substantial com-
+putational demands and growing parameter sizes.
+In this paper, we introduce TreeLoRA (K-D Tree
+of Low-Rank Adapters), a novel approach that
+constructs layer-wise adapters by leveraging hier-
+archical gradient similarity to enable efficient CL,
+particularly for LPMs. To reduce the computa-
+tional burden of task similarity estimation, we
+employ bandit techniques to develop an algo-
+rithm based on lower confidence bounds to ef-
+ficiently explore the task structure. Furthermore,
+we use sparse gradient updates to facilitate pa-
+rameter optimization, making the approach better
+suited for LPMs. Theoretical analysis is provided
+to justify the rationale behind our approach, and
+experiments on both vision transformers (ViTs)
+andlarge language models (LLMs) demonstrate
+the effectiveness and efficiency of our approach
+across various domains, including vision and nat-
+ural language processing tasks.
+1. Introduction
+Machine learning algorithms have achieved significant suc-
+cess across a wide range of applications. However, dis-
+tribution shift still poses a challenge to machine learning
+1National Key Laboratory for Novel Software Technology, Nan-
+jing University, China2School of Artificial Intelligence, Nanjing
+University, China3RIKEN AIP, Tokyo, Japan. Correspondence to:
+Peng Zhao <zhaop@lamda.nju.edu.cn>.
+Proceedings of the 42ndInternational Conference on Machine
+Learning , Vancouver, Canada. PMLR 267, 2025. Copyright 2025
+by the author(s).algorithms (Bengio et al., 2021; Zhou, 2022; Sutton et al.,
+2022), where new tasks with different data distributions are
+encountered sequentially, leading to a performance degra-
+dation over time (Vela et al., 2022). This sequential na-
+ture necessitates a learning method capable of continuous
+adaptation and evolution, named continual learning (CL),
+in which models must adapt to new tasks while retaining
+knowledge from previous ones to alleviate catastrophic for-
+getting (Thrun & Pratt, 1997).
+Existing CL approaches can be generally classified into
+three main categories (Wang et al., 2024b): regularization-
+based methods (Kirkpatrick et al., 2017), which introduce
+specially designed regularizers to prevent the model from
+forgetting previously learned knowledge; rehearsal-based
+methods (Shin et al., 2017), which store data from previ-
+ous tasks in a buffer and reuse it during the ongoing task
+stream; and architecture-based methods (Mallya & Lazeb-
+nik, 2018; Serrà et al., 2018), which design specialized
+model architectures to dynamically adapt to new tasks and
+mitigate forgetting. These approaches have demonstrated
+strong empirical performance for continual learning tasks
+with conventional machine learning models.
+Nowadays, with the rise of the pre-training paradigm, large
+pre-trained models (LPMs) have excelled in numerous tasks
+such as natural language processing (Brown et al., 2020)
+and computer vision (Radford et al., 2021). The necessity
+ofefficient CL , especially the approaches that are tailored
+to LPMs, has become increasingly demanding, due to the
+substantial computational demands and growing parame-
+ter sizes. Therefore, it is essential to explore the issue of
+efficient continual learning, particularly the Continual Fine-
+Tuning (CFT) of LPMs. Although there exist some continual
+learning methods developed for LPMs (Scialom et al., 2022;
+Wang et al., 2023b; Dou et al., 2024), they often do not
+focus on the efficiency in CL, typically exhibiting compu-
+tational complexity that scales linearly with the number of
+tasks. Consequently, this raises a critical new challenge:
+How to develop an efficient continual learning approach,
+particularly fitted for large pre-trained models?
+In this paper, we propose an efficient continual learning ap-
+proach that facilitates adaptation to new tasks by leveraging
+task-shared knowledge, while avoiding the linear computa-
+1TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+tional complexity that scales with the number of tasks. Our
+approach, TreeLoRA (short for “K-D Tree ofLow-Rank
+Adapters”), introduces layer-wise adapters to construct a
+hierarchical tree based on the criteria of gradient similar-
+ity. This design organizes and manages historical tasks
+efficiently, thereby eliminating linear task-dependence. To
+ensure the overall efficiency, two key components are devel-
+oped. First, it is necessary to estimate the gradient similarity
+on the fly during training, and we employ bandit techniques
+and develop an algorithm based on the lower confidence
+bound (Garivier & Moulines, 2011) to efficiently search on
+the tree structure. Second, to better suit the LPMs, we apply
+sparse gradient updates to optimize model parameters more
+efficiently for new task adaptation.
+Our approach shows advantages both in theory and prac-
+tice. Theoretically, owing to our designed tree structure,
+our approach achieves tighter regret bounds compared to
+conventional bandit search methods that do not utilize such
+a structure, justifying the rationale behind our approach.
+Empirically, we conduct experiments on vision transformers
+and large language models, across both the computer vision
+benchmarks and natural language processing tasks, to vali-
+date the performance and efficiency of our approach. The
+experimental results demonstrate that, with similar or even
+improved performance, our method achieves up to a 3.2 ×
+speedup for ViTs and 2.4 ×speedup for LLMs in training
+time, compared to previous state-of-the-art methods, thereby
+validating the effectiveness and efficiency of our approach.
+Organization. Section 2 introduces the problem formula-
+tion. Section 3 presents our TreeLoRA approach. Section 4
+provides theoretical guarantees. Section 5 reports exper-
+iments, and Section 6 concludes the paper. Due to page
+limits, we defer more empirical studies to Appendix A and
+related works to Appendix B. All proofs are in Appendix C.
+2. Problem Formulation
+In this section, we introduce the problem formulation. Our
+setting is a typical continual learning problem (Lange et al.,
+2022), where there are two stages: (i) the offline initializa-
+tion stage and (ii) the online adaptation stage.
+(i)In the offline initialization stage, the learner has access
+to a lot of labeled data sampled from initial distribution
+D0defined over the feature space Xand label space
+Y, and can use these data to learn a good pre-trained
+model parameter w0∈Rd.
+(ii)In the online adaptation stage, a sequence of tasks
+{T1,T2, . . . ,TN}arrive sequentially, where Nis the
+total number. For the n-th task, the learner receives
+a few labeled data Sn={xt
+n, yt
+n}mn
+t=1sampled from
+distribution Dn. The learner needs to use these data to
+update the current model parameter wn∈Rd.
+/uni00000087 /uni00000089/uni00000087/uni00000087/uni00000087 /uni0000008b/uni00000087/uni00000087/uni00000087 /uni000000a4/uni00000087/uni00000087/uni00000087 /uni000000a5/uni00000087/uni00000087/uni00000087 /uni00000088/uni00000087/uni00000087/uni00000087/uni00000087 /uni00000088/uni00000089/uni00000087/uni00000087/uni00000087 /uni00000088/uni0000008b/uni00000087/uni00000087/uni00000087 /uni00000088/uni000000a4/uni00000087/uni00000087/uni00000087
+/uni00000019/uni00000021/uni00000031/uni00000036/uni000000a3/uni00000027/uni00000039/uni00000002/uni00000019/uni00000027/uni00000027/uni00000032/uni00000087/uni00000089/uni00000087/uni0000008b/uni00000087/uni000000a4/uni00000087/uni000000a5/uni00000087/uni0000001a/uni00000027/uni00000039/uni0000003b/uni00000002/uni00000003/uni00000024/uni00000024/uni0000003c/uni00000038/uni00000021/uni00000024/uni00000040/uni00000002/uni0000006c/uni000000a6/uni0000006d
+/uni0000001a/uni00000038/uni00000027/uni00000027/uni00000010/uni00000033/uni00000018/uni00000003
+/uni00000010/uni00000033/uni00000018/uni00000003Figure 1: Test accuracy vs. the number of arrived samples for
+ourTreeLoRA and the vanilla LoRA (Hu et al., 2022) on the Split
+CIFAR-100 dataset when encountering a new task, demonstrating
+our efficiency to adapt to new tasks, owing to mining the hierarchi-
+cal gradient-similarity structure to explore task-shared knowledge.
+The goal is to learn a good model that performs well not only
+on the current task but also on previous ones. Specifically,
+we denote fi(wj)as the prediction performance (such as the
+accuracy, SARI score, and ROUGE-L score, etc.) evaluated
+on task iusing the parameters updated up to task j, then the
+overall performance (OP) for the n-th model is
+OPn≜1
+nnX
+i=1fi(wn).
+Another important goal is to minimize the forgetting rate,
+which is defined as backward transfer (BWT) that measures
+catastrophic forgetting by comparing a model’s performance
+on old tasks before and after learning new ones, that is
+BWTn≜1
+nnX
+i=1(fi(wi)−fi(wn)),
+which measures the performance degradation on previous
+tasks. Therefore, the goal is to learn a model wnthat can
+achieve maximal OPandminimal BWT. Note that we focus
+on a more challenging task where the identity of the task is
+not available during testing.
+3. Our Approach
+This section presents our approach. First, we introduce our
+novel continual update framework for large pre-trained mod-
+els, leveraging LoRAs with a tree structure. Next, we detail
+the construction of the tree using a bandit algorithm. Finally,
+we explain how the model is updated efficiently through
+sparse updates facilitated by the TreeLoRA structure.
+3.1. Constructing Task-Similarity Tree Structure
+In this part, we will detail our novel continual update frame-
+work for LPMs, leveraging LoRAs with a tree structure.
+Our key technical insight is that some tasks exhibit similar
+characteristics and can be grouped together, allowing for
+2TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+TokenizerEmbeddingSelf-AttentionLayer 1Self-AttentionLayer 2Self-AttentionLayer NMLPinputsoutputsSelf-AttentionLayer N-1… …
+Efficient Bandit Searchfor TreeLoRAShallow LayersDeep Layerstask 1task 3task NIntermediateNode 1IntermediateNode 2Root Node
+…………task 2…Leaf nodes
+…TreeLoRA  StructureTasks in CL
+(a) Our TreeLoRA Structure
+TokenizerEmbeddingSelf-AttentionLayer 1Self-AttentionLayer 2Self-AttentionLayer DMLPinputsoutputsSelf-AttentionLayer D-1… …
+Efficient Bandit Searchfor TreeLoRAShallow LayersDeep Layerstask 1task 3task NIntermediateNode 1IntermediateNode 2Root Node
+…………task 2…Leaf nodes
+…TreeLoRA  StructureTasks in CL (b) Assembling TreeLoRA into Transformer-based Models
+Figure 2: Figure illustrating our approach: (a) We develop the TreeLoRA approach for efficient continual learning, where each node
+represents a task group, and each leaf node corresponds to an individual task. The children of each node represent subgroups that belong
+to the parent node. (b) Employing TreeLoRA for transformer-based models: when encountering a new task, we first perform the bandit
+algorithm to identify the most relevant task group, then assemble the corresponding LoRA adapter to efficiently adapt to the task.
+the use of task-shared knowledge to improve performance
+and accelerate adaptation to new tasks. Conversely, tasks
+that differ significantly or even conflict with others are han-
+dled separately to alleviate catastrophic forgetting. With
+this insight, we propose a novel approach that explicitly
+leverages the hierarchical task-similarity structure to en-
+hance the efficiency of continual learning. Specifically, we
+introduce TreeLoRA , designed to explore and manage task
+relationships, whose effectiveness is shown in Figure 1.
+Tree Structure Design. Consider a deep neural network
+as the learning model, which can be divided into multiple
+layers of parameters and connected by activation functions.
+Shallow layers (closer to the input) tend to capture low-level
+task-shared common patterns, while deeper layers (closer to
+the output) capture high-level task-specific semantics. Our
+TreeLoRA mirrors this structure, as shown in Figure 2: the
+root node represents all tasks, and nodes in shallow layers
+represent adapters that capture shared low-level patterns
+across several task groups. Nodes in deeper layers repre-
+sent high-level task-specific semantics, and the leaf nodes
+correspond to adapters for individual tasks.
+Task Similarity Measurement. We organize tasks based
+on the similarity of the gradient directions – tasks with
+similar gradient directions are grouped together, facilitat-
+ing shared knowledge extraction and streamlined continual
+learning. Formally, consider a data stream of Ntasks. At
+round n∈[N], we receive a new task nassociated with
+a labeled dataset Sn= (xt
+n, yt
+n)mn
+t=1sampled from the task
+distribution Dn. The expected gradient direction for task n
+of model k(w.r.t. the task Tk) is defined as:
+gk≜E(x,y)∼Dn[∇ℓ(wk;x, y)],and the TreeLoRA structure is constructed based on the
+similarity of gradient directions. Specifically, the node Nj
+(representing a set of tasks) is defined as:
+Nj=max{N ⊆ [N] :∥gi−gi′∥1≤δ,∀i, i′∈ N} ,(1)
+where δis the similarity threshold. Note that we choose L1-
+norm as the similarity measure, as L1-norm is more robust
+in high-dimensional spaces (Aggarwal et al., 2001). This
+hierarchical task structure facilitates efficient adaptation to
+new tasks while preserving knowledge from previous tasks.
+By grouping tasks with similar characteristics, shared knowl-
+edge can be leveraged to accelerate learning and enhance
+continual learning performance.
+To summarize, our TreeLoRA structure begins with a root
+node and incrementally builds a hierarchical tree structure
+as new tasks arrive. For each incoming task, it utilizes a
+bandit algorithm to identify the most suitable branch that
+shares similar gradient directions. Sparse gradient updates
+are then performed to efficiently adapt the model parame-
+ters while retaining previously acquired knowledge. At the
+end of each task stream, the key parameters of that task are
+recorded, and the TreeLoRA structure is updated accord-
+ingly. The complete algorithm is outlined in Algorithm 1.
+In the following sections, we provide a detailed explanation
+of how the tree is adaptively constructed using the bandit
+algorithm, and our sparse updates mechanism.
+3.2. Adaptive Tree Construction via Bandit Algorithm
+In this section, we demonstrate how the tree structure is con-
+structed. As illustrated in the previous section, TreeLoRA
+captures task similarity through gradient direction. A signif-
+icant challenge, however, lies in the fact that the gradient di-
+rection can only be determined after calculating gradients of
+3TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+allprevious tasks with linear complexity. This requirement
+makes it computationally infeasible, as it would require per-
+forming gradient descent O(N)times, for all previous tasks.
+To overcome this limitation, we introduce a novel bandit
+algorithm that efficiently constructs the tree structure on
+the fly with only onegradient query each round, therefore
+greatly improving the computational efficiency.
+Converting to Multi-Armed Bandits Problem. The key
+dilemma lies in the costly computation complexity of cal-
+culating all previous gradients to determine the gradient
+similarity between the current task and previous tasks. To
+tackle this challenge, instead of calculating all previous gra-
+dients, we only select one most promising previous task to
+query the gradient and estimate the similarity. This scenario
+naturally aligns with an exploration-exploitation trade-off.
+Specifically, we convert the challenge to multi-armed ban-
+dits(MAB) problem, a fundamental problem in the online
+learning field, where the learner does not have access to all
+previous gradients but can only selectively obtain some (or
+even just one) gradient from the set of previous tasks.
+Formally, we treat each previous task k(k∈[n−1]) as a
+bandit arm. The gradient of the current sample is denoted as
+bgt
+n≜∇ℓ(wn;xt
+n, yt
+n),t∈ {1, . . . , m n}, and the previous
+gradient (w.r.t. that tree branch) is bgt
+k≜∇ℓ(wk;xt
+n, yt
+n).
+At each iteration t∈ {1, . . . , m n}, the learner can only pull
+one arm, i.e., choose only one previous task k∈[n−1],
+and obtain the corresponding empirical residual gradient ˆξk
+t,
+which is the sum of the empirical gradients’ differences
+ˆξk
+t≜d′X
+i=1S
+∇ℓ(wn;xt
+n, yt
+n)− ∇ℓ(wk;xt
+n, yt
+n)
+i,
+where S[·]is the low-rank sparsify function that updates
+only the most relevant parts of the parameters, i.e., the
+task-specific low-rank adapter. ˆξk
+trepresents the estimated
+difference between the gradient of the current sample and
+previous task-shared gradient. The true target ξk⋆, however,
+is nearest task’s expected residual gradient , defined as
+ξk⋆≜dX
+i=1E(x,y)∼Di[∇ℓ(wn;x, y)− ∇ℓ(wk⋆;x, y)]i,
+where k⋆is the most relevant task for the current task i. The
+goal is to design a bandit algorithm to minimize cumulative
+loss between the selected arm and the optimal arm.
+Inspired by previous bandit algorithms (Coquelin & Munos,
+2007), we introduce Lower Confidence Bound (LCB) algo-
+rithm to adaptively construct the tree structure. Specifically,
+the LCB of the k-th node in the TreeLoRA is defined as
+LCB k=
+
+bµk−2q
+logt
+nk, ifk∈L
+max
+min
+j∈C
+bµj−2q
+logt
+nj−δ	
+,ifk /∈L(2)Algorithm 1 TreeLoRA for Efficient Continual Learning
+Input: learning rate α, regularization coefficient λ
+Initialize: task similarity estimation bµk= 0,∀k∈[N]
+Initialize the TreeLoRA structure with a root node;
+forn= 1, . . . , N do
+Receive n-th task with labeled data Sn={(xt
+n, yt
+n)}mn
+t=1;
+fort= 1, . . . , m ndo
+Use LCB to select most promising branch as Eq.(2);
+Employ sparse gradient updates as Eq. (3);
+Update the estimated task similarity bµk.
+end
+Record the task-specific adapter for the n-th task;
+Update the TreeLoRA structure as in Section 3.3.
+end
+wherebµk=1
+|Select k|P
+τ∈{Select k}ˆξk
+τis the estimated task
+similarity between the current task and the k-th task group
+(i.e., the nodes in the branch of the selected leaf node at
+round t),Lis the set of all leaf nodes, and Cis the child
+nodes of the k-th node. The term 2p
+logt/nkin the LCB
+accounts for the uncertainty in the similarity estimation,
+encouraging exploration of less frequently selected nodes.
+The LCB is computed for each layer of the model. By
+calculating the LCB layer by layer, TreeLoRA captures
+the similarity between tasks at various levels throughout
+the model hierarchy as illustrated in Figure 2, allowing
+us to better capture hierarchical task similarities, which
+is especially advantageous in transformer-based models.
+Our LCB algorithm determines the most promising task
+group for the current task by selecting the node kwith the
+minimum LCB value. This approach balances the trade-off
+between exploring potential task similarity relationships and
+exploiting known, promising task groups to optimize the
+tree construction process.
+Bandit Algorithm on a Smooth Tree. By leveraging
+the hierarchical structure of TreeLoRA, our bandit algo-
+rithm on a smooth tree (Coquelin & Munos, 2007) signifi-
+cantly enhances efficiency compared to conventional ban-
+dit algorithms that do not utilize this structure. As stated
+in Theorem 1, our algorithm reduces the regret from the
+conventional O(√
+N)toO(√logN)w.r.t. the number of
+tasks N. Consequently, we achieve faster identification of
+the most similar task group, which substantially reduces
+computational complexity. This improvement demonstrates
+the advantage of TreeLoRA to efficiently search for relevant
+tasks and mine the hierarchical task structure.
+3.3. Efficient Sparse Updates
+In this part, we will detail how to efficiently update the
+model by leveraging the hierarchical task structure. Specif-
+4TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+ically, we only sparsely update a portion of the model pa-
+rameters based on the hierarchical task structure. As shown
+in Figure 3, we first identify the most relevant task group
+for the current task based on our bandit algorithm. We then
+perform a sparse update on the model parameters, where
+only the parameters that are relevant are updated.
+Specifically, for the n-th task, we choose the most rele-
+vant parameters by an adaptive regularization term as the
+regularizer, which is formally defined as
+ℓt
+reg≜|ˆξk
+t|=∥bgt
+n−bgt
+k∥1.
+This regularizer term enables adaptively selective parameter
+updates for the current task group by identifying and mod-
+ifying only the most relevant parameters while preserving
+previously learned knowledge. The final loss combines the
+task loss and the regularizer term, leading to the formal
+model update definition as follows
+wt+1
+n=wt
+n−α· S
+∇ℓ(wt
+n;xt, yt)
+−λ· ∇ℓt
+reg,(3)
+where αis the learning rate, Sis the low-rank sparsify
+function, and λdenotes the regularization coefficient. Fi-
+nally, the updated model is obtained based on the previously
+learned model parameters and assembling the newly learned
+sparse update part, as illustrated in Figure 3.
+This sparse update strategy enables us to efficiently adapt
+the model to new tasks while preserving knowledge of pre-
+viously learned ones. At the end of each task stream, we
+record the key parameters for the n-th task, which is the
+set of relevant parameters that are updated for the current
+task, and we add these newly-obtained sparse parameters
+into the TreeLoRA structure and update the tree structure
+accordingly, as demonstrated in Algorithm 1.
+Practical Implementation. In practice, we draw inspi-
+ration from LoRA (Hu et al., 2022) to perform the sparse
+update, a widely used method for efficiently tuning LPMs.
+Specifically, we utilize LoRA adapters to approximate the
+gradient of the current task and then apply sparse updates
+to model parameters. For the ViTs, we set the tree depth
+to 5; and for LLMs, we set it to 64. We clarify that tree
+depth is not directly determined by the number of tasks, as
+a single node can contain multiple tasks, allowing it to scale
+to a large number of tasks. However, the depth should not
+exceed the number of transformer layers, and it is treated as
+a tunable hyperparameter. Further empirical analysis of tree
+depth is provided in Section 5.2.
+Inspired by the K-D tree data structure (Bentley, 1990), the
+task-similarity threshold δdoes not require manual tuning,
+as it is automatically determined when we construct the tree
+after each task. Specifically, at each split, the threshold is
+computed by taking the median of the similarity, i.e., L1-
+norm, between each task gradient and the mean gradient
+task tIntermediateNode 1Root Node…Initial modelw0Previous learned paramsNewly learned sparse paramsof task tFigure 3: Illustration of the sparse update mechanism, where the
+blue part is the sparse update part we obtained for the t-th task.
+within the corresponding task group, ensuring balanced
+tree growth and adaptive partitioning. After each task, we
+store the task-specific LoRA adapter and update the tree by
+inserting adapter into the leaf node of nearest branch by a
+depth-first search, thus adding new nodes and expanding the
+tree. If nodes exceed storage budget, we choose the closest
+adapters and reduce them to a single one. After the training,
+we select the most recently learned adapter for inference.
+Remark 1 (Discussion of Efficiency) .The hierarchical tree
+structure and sparse update strategy significantly reduce
+the computational complexity and storage of the algorithm.
+Previous methods typically require computing gradients
+of all previous tasks, resulting in a complexity of O(N)
+per round. In contrast, our tree-based bandit algorithm
+avoids this linear computational complexity which scales
+with the number of tasks, but only explores the relevant tree
+branches at each round and achieves a complexity of O(1).
+The storage complexity is also minimal, as we store only
+the low-rank adapter for each task, which is much smaller
+than the full model parameters. Furthermore, our method
+requires only constant GPU memory during training, thanks
+to the efficiency of the bandit search strategy.
+Remark 2 (Generality of TreeLoRA) .Our TreeLoRA struc-
+ture is broadly applicable to various machine learning mod-
+els, including deep neural networks, random forests, and
+other architectures. While applicable to a wide range
+of model architectures, it provides particular benefits for
+transformer-based models due to their large parameter count
+and inherent hierarchical structure. The layered organization
+of transformers naturally aligns with TreeLoRA’s hierarchi-
+cal task structure, enabling efficient knowledge sharing and
+task adaptation. This makes TreeLoRA especially effective
+for continual learning with transformer models, though its
+benefits extend to other architectures as well.
+4. Theoretical Analysis
+In this section, we provide theoretical guarantees for our
+TreeLoRA. We first introduce the measure of pseudo-regret,
+then provide regret bound analysis of our algorithm.
+As demonstrated in Section 3.2, we convert the task structure
+5TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+searching to a bandit problem. In this section, we provide
+the theoretical guarantee of regret bound for our algorithm.
+The measure is the pseudo-regret (Bubeck & Cesa-Bianchi,
+2012), which is the difference of cumulative loss between
+the selected arm and the optimal arm, formally,
+Reg(T)≜E"TX
+t=1ˆξk
+t#
+−min
+k⋆∈[n−1]TX
+t=1ξk⋆,
+where Tis the total number of iterations. To establish
+theoretical guarantees for our bandit algorithm on the tree
+structure, note that our TreeLoRA naturally groups similar
+tasks into the same branch, enabling efficient mining and
+managing of task similarity structure. We formalize this
+observation of smooth tree as Assumption 1.
+Assumption 1 (Assumption Aηof Coquelin & Munos
+(2007)) .For any node i∈ Iηin TreeLoRA with depth
+d < D , there exists δd>0, such that for all j∈L(Ni),
+|ξj−ξi| ≤δd,
+where δdis the smooth coefficient, Iη≜{node i,∆i≤η}
+is the set of η-optimal nodes, in which ∆i≜ξi−ξk⋆
+is the suboptimality gap. L(Ni)denotes the set of leaf
+nodes in the branch of node Ni, and ξirepresents the
+residual gradient of task i, formally defined as ξi≜
+E(x,y)∼Dn[∇ℓ(wn;x, y)− ∇ℓ(wi;x, y)].
+This assumption characterizes the nature smoothness prop-
+erty of our TreeLoRA structure, where tasks grouped within
+the same branch are inherently similar by constructing a
+tree as Eq. (1)such that the leaves of a branch have sim-
+ilar values. The smoother the tree, the smaller δdwill be.
+Further, if we assume that the empirical residual gradient
+ˆξk
+thas some unbiased noise that can be eliminated by the
+sparsify operation, then it indicates that E[ˆξk
+t] =ξk, which
+means the learner can obtain an unbiased estimation of the
+true residual gradient at each iteration.
+We are now ready to provide the following theoretical guar-
+antee for our proposed algorithm.
+Theorem 1 (Regret Bound) .Under Assumption 1, as-
+sume Aηwith an exponential sequence δd=δγd. Then,
+with probability at least 1−1/T, the cumulative regret of
+TreeLoRA after Trounds satisfies:
+Reg(T)≤ O s
+T|Jη|logNT
+|Jη|
++δc
+η2+clogNT
+η2!
+,
+where Jη≜{leaf node i,|ξi−ξk⋆| ≤ η}is the set
+of leaf nodes with a suboptimality gap less than η,T
+is the number of rounds, Nis the number of tasks, and
+c≜log(2) /log(1/γ)is a constant.Note that Jηis the set of leaf nodes with a suboptimality
+gap less than η, which implies that |Jη| ≤N. Consequently,
+Theorem 1 demonstrates that the regret’s dependency on the
+number of tasks improves from the conventional order of√
+Nto a problem-dependent order ofp
+|Jη|. Ifδ= +∞
+andη= +∞, the smooth tree structure reduces to the
+trivial case of non-smoothness, resulting in |Jη|=N. In
+this scenario, we recover the conventional regret bound
+of the LCB algorithm without structural assumptions, i.e.,
+O(√TNlogT). On the other hand, in a benign case where
+δ,ηand|Jη|can be treated as constants, the regret bound
+simplifies to O(p
+Tlog(NT)), reducing the dependency
+on the number of tasks from O(√
+N)toO(log(N)). Theo-
+rem 1 validates the rationality and effectiveness of our pro-
+posed bandit search strategy with the hierarchical tree struc-
+ture. The proof of Theorem 1 is deferred to Appendix C.1.
+5. Experiments
+This section provides the experimental results of our ap-
+proach. To comprehensively evaluate the effectiveness
+and efficiency of our proposed TreeLoRA, we conduct
+empirical experiments across two modern model architec-
+tures: vision transformers (ViT) and large language mod-
+els(LLMs), across both the computer vision and the natural
+language processing tasks.1Our experimental evaluation
+aims to answer the following three research questions:
+•Q1: How does TreeLoRA perform compared to existing
+continual learning methods?
+•Q2: How efficient is our proposed TreeLoRA in terms of
+the computational efficiency?
+•Q3: How effective is the TreeLoRA to capture the inher-
+ent task similarity structure?
+5.1. Evaluation on Vision Transformers
+We first evaluate on vision transformer models using three
+widely-adopted computer vision benchmarks, i.e., Split
+CIFAR-100, Split ImageNet-R, and Split CUB-200.
+Contenders. To validate the effectiveness of our ap-
+proach, we compared our TreeLoRA with several recent
+contenders. The following seven methods can be catego-
+rized into five groups: (i) The baseline method SeqLoRA ,
+which is a standard LoRA method that naively learns a new
+LoRA adapter for each task; (ii) Rehearsal-based methods
+represented by GEM (Lopez-Paz & Ranzato, 2017), which
+utilize episodic memory to prevent catastrophic forgetting;
+(iii) Regularization-based methods exemplified by EWC
+from (Kirkpatrick et al., 2017), which constrain parameter
+updates to prevent forgetting, (iv) Prompt-based methods
+1Our code and datasets are available at https://github.
+com/ZinYY/TreeLoRA
+6TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+Table 1: Comparison of different continual learning methods on ViTs with three benchmark datasets. For each method, we report the
+average accuracy (A CC(%)↑), backward transfer (B WT(%)↓), and training time (T IME(s)↓) metrics. Results are averaged over three
+runs with standard deviations. The best results are highlighted in bold.
+SeqLoRA GEM EWC L2P DualPrompt HiDePrompt HiDeLoRA TreeLoRA
+Split CIFAR-100
+ACC(%)↑10.35±0.35 76.46 ±0.35 84.79 ±0.09 79.66 ±0.60 78.83 ±0.53 83.71 ±0.03 88.46 ±0.04 88.54±0.05
+BWT(%)↓97.62±0.11 04.37 ±0.30 05.22 ±0.04 04.40 ±0.01 04.89 ±1.67 05.34 ±0.26 04.33 ±0.41 04.37 ±0.15.
+TIME(s)↓ .694±80. .22456 ±3100. .4091 ±140. .1240 ±120. .1173 ±140. .1205 ±110. .692 ±70. 214±40.
+Split ImageNet-R
+ACC(%)↑ 8.65±0.15 54.45 ±0.76 55.43 ±0.54 56.75 ±0.61 54.81 ±0.40 62.94 ±0.91 72.28±0.15 71.94±0.47
+BWT(%)↓82.55±0.93 02.16 ±0.40 09.10 ±0.97 03.66 ±0.16 04.39 ±0.11 03.18 ±0.56 04.16 ±0.05 04.06 ±0.40
+TIME(s)↓ .797±11. .17244 ±2900. .4727 ±210. .1431 ±100. .1357 ±150. .1354 ±130. .796 ±90. .260±50.
+Split CUB-200
+ACC(%)↑ 9.10±0.41 61.28 ±0.45 36.34 ±0.34 39.72 ±0.34 37.52 ±0.37 63.86 ±0.11 73.48 ±1.35 73.66±0.22
+BWT(%)↓83.45±0.23 02.64 ±0.30 06.65 ±0.53 07.98 ±0.70 11.91 ±0.04 05.57 ±0.23 05.38 ±0.21 04.87 ±0.30
+TIME(s)↓0.194±11.0 .7233 ±180. .1702 ±900. .333 ±50. .315 ±40. .307 ±10. .194 ±30. .086±30.
+/uni00000088 /uni00000089 /uni0000008a /uni0000008b /uni0000008c /uni000000a4 /uni0000008d /uni000000a5 /uni0000008e /uni00000088/uni00000087
+/uni0000001a/uni00000021/uni00000039/uni00000030/uni00000039/uni0000008d/uni0000008c/uni000000a5/uni00000087/uni000000a5/uni0000008c/uni0000008e/uni00000087/uni0000008e/uni0000008c/uni00000088/uni00000087/uni00000087/uni00000003/uni00000024/uni00000024/uni0000003c/uni00000038/uni00000021/uni00000024/uni00000040/uni00000002/uni0000006c/uni000000a6/uni0000006d/uni0000000b/uni00000009/uni00000011
+/uni00000009/uni0000001d/uni00000006
+/uni00000010/uni00000089/uni00000016
+/uni0000001a/uni00000038/uni00000027/uni00000027/uni00000010/uni00000033/uni00000018/uni00000003/uni00000008/uni0000003c/uni00000021/uni000000a3/uni00000016/uni00000038/uni00000033/uni00000031/uni00000036/uni0000003b
+/uni0000000c/uni0000002d/uni00000008/uni00000027/uni00000016/uni00000038/uni00000033/uni00000031/uni00000036/uni0000003b
+/uni0000000c/uni0000002d/uni00000008/uni00000027/uni00000010/uni00000033/uni00000018/uni00000003
+(a) error curve
+/uni00000011/uni00000027/uni0000003b/uni0000002c/uni00000033/uni00000026/uni00000087/uni00000089/uni00000087/uni00000087/uni0000008b/uni00000087/uni00000087/uni000000a4/uni00000087/uni00000087/uni000000a5/uni00000087/uni00000087/uni00000088/uni00000087/uni00000087/uni00000087/uni00000088/uni00000089/uni00000087/uni00000087/uni0000001a/uni00000038/uni00000021/uni0000002d/uni00000032/uni0000002d/uni00000032/uni0000002b/uni00000002/uni0000001a/uni0000002d/uni00000031/uni00000027/uni00000002/uni0000006c/uni00000039/uni0000006d
+/uni00000019/uni00000027/uni00000037/uni00000010/uni00000033/uni00000018/uni00000003 /uni00000010/uni00000089/uni00000016 /uni00000008/uni0000003c/uni00000021/uni000000a3/uni00000016/uni00000038/uni00000033/uni00000031/uni00000036/uni0000003b /uni0000000c/uni0000002d/uni00000008/uni00000027/uni00000016/uni00000038/uni00000033/uni00000031/uni00000036/uni0000003b /uni0000000c/uni0000002d/uni00000008/uni00000027/uni00000010/uni00000033/uni00000018/uni00000003 /uni0000001a/uni00000038/uni00000027/uni00000027/uni00000010/uni00000033/uni00000018/uni00000003 (b) efficiency comparison
+/uni00000087 /uni0000008c/uni00000087 /uni00000088/uni00000087/uni00000087 /uni00000088/uni0000008c/uni00000087 /uni00000089/uni00000087/uni00000087 /uni00000089/uni0000008c/uni00000087 /uni0000008a/uni00000087/uni00000087
+/uni00000009/uni00000028/uni00000028/uni0000002d/uni00000024/uni0000002d/uni00000027/uni00000032/uni00000024/uni00000040/uni00000002/uni0000006c/uni00000039/uni00000021/uni00000031/uni00000036/uni000000a3/uni00000027/uni00000063/uni00000039/uni0000006d/uni0000008d/uni000000a4/uni0000008d/uni000000a5/uni000000a5/uni00000087/uni000000a5/uni00000089/uni000000a5/uni0000008b/uni000000a5/uni000000a4/uni000000a5/uni000000a5/uni0000008e/uni00000087/uni00000003/uni00000024/uni00000024/uni0000003c/uni00000038/uni00000021/uni00000024/uni00000040/uni00000002/uni0000006c/uni000000a6/uni0000006d/uni0000001a/uni00000038/uni00000027/uni00000027/uni00000010/uni00000033/uni00000018/uni00000003
+/uni00000010/uni00000089/uni00000016
+/uni00000008/uni0000003c/uni00000021/uni000000a3/uni00000016/uni00000038/uni00000033/uni00000031/uni00000036/uni0000003b/uni0000000c/uni0000002d/uni00000008/uni00000027/uni00000016/uni00000038/uni00000033/uni00000031/uni00000036/uni0000003b/uni0000000c/uni0000002d/uni00000008/uni00000027/uni00000010/uni00000033/uni00000018/uni00000003 (c) speed-accuracy comparison
+Figure 4: (a) Comparison of performance on the Split CIFAR-100. (b) Comparison of the efficiency of different methods. (c) Comparison
+of accuracy and efficiency (with mean and standard deviation over three runs). The closer to the top-right corner, the better the algorithm.
+including L2P (Wang et al., 2022b) and DualPrompt (Wang
+et al., 2022a), which learn prompts while keeping the model
+parameters frozen; and (v) the hierarchical decomposition
+methods including HiDePrompt (Wang et al., 2023a) and
+HiDeLoRA (Wang et al., 2024a), which divide the contin-
+ual learning into sub-components. Further comparative re-
+sults, including those of SAPT (Zhao et al., 2024b) and
+TASL (Feng et al., 2024), are provided in Appendix A.
+Results Analysis of ViTs Experiments. To answer ques-
+tionQ1, we compare TreeLoRA with state-of-the-art meth-
+ods across three benchmark datasets on ViTs. As shown
+in Table 1, the naive SeqLoRA does not perform well, as it
+learns a new adapter for each task, leading to catastrophic
+forgetting. Conventional CL methods, such as GEM and
+EWC , are not specifically designed for LPMs, and do not
+achieve the same level of performance as more recent meth-
+ods. TreeLoRA outperforms previous state-of-the-art meth-
+ods, HiDeLoRA andHiDePrompt , achieving the best accu-
+racy on two out of three datasets. This superior performance
+can be attributed to TreeLoRA’s ability to exploit task simi-
+larity structures and leverage shared knowledge across tasks.
+Efficiency Evaluation. To answer question Q2, we presentTable 2: Performance comparison of TreeLoRA with different
+training epochs on Split CIFAR-100. Results show that TreeLoRA
+achieves good performance even with few training epochs.
+Acc(%)↑ Bwt (%)↓ Time (s)↓
+TreeLoRA (2 epochs) 87.73±0.12 4.13 ±0.25 023 ±0.27
+TreeLoRA (10 epochs) 88.23±0.16 4.29 ±0.11 108 ±1.54
+TreeLoRA (20 epochs) 88.54±0.05 4.37 ±0.15 214 ±4.12
+the training time of different methods. As shown in Table 1
+and Figure 4(b), our TreeLoRA achieves comparable per-
+formance compared to previous state-of-the-art methods,
+while requiring significantly less training time, resulting in
+a 3.2×speedup. Figure 4(c) illustrates the speed-accuracy
+trade-off of different methods, where methods closer to the
+top-right corner are better, as they achieve higher accuracy
+with less training time. Our TreeLoRA ranks among the top
+performers and processes nearly three times more samples
+per second than previous state-of-the-art methods.
+We also compare TreeLoRA’s performance with different
+training epochs. As shown in Table 2, TreeLoRA achieves
+a good performance even with just two epochs of train-
+ing, reaching 87.73% accuracy on the Split CIFAR-100.
+7TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+Table 3: Comparison of different continual learning methods on various foundation models on the TRACE dataset (Wang et al., 2023c).
+For each method, we report the overall performance ( OP(%)↑), backward transfer ( BWT(%)↓), and training time ( TIME(s)↓) metrics.
+Results are averaged over three runs with standard deviations. The best results are highlighted in bold.
+FIX (ICL) SeqLoRA OGD GEM EWC L2P DualPrompt HiDeLoRA O-LoRA TreeLoRA
+mistralai / Mistral-7B-Instruct-v0.3
+OP(%)↑45.04±0.3 46.94±1.2 45.44±1.6 52.32±1.2 52.45±1.3 49.32±0.8 51.14±1.2 51.81±0.9 52.02±0.8 54.77±1.1
+BWT(%)↓ — 11.41 ±0.6 12.75±0.7 6.01±0.3 05.98±0.8 05.34±0.6 06.13±0.5 06.25±0.3 08.13±0.6 03.77±0.4
+TIME(s)↓ — 0.1091 ±25. 0.6952 ±156. .7937±167. 52739±198 0.975±23. 0.983±24. .1288±28. .1302±29. 0.510±20.
+meta-llama / LLaMA-2-7B-Chat
+OP(%)↑38.94±0.3 34.30±1.2 42.09±1.6 40.08±1.6 42.36±1.2 36.23±0.8 37.69±1.2 41.60±0.8 42.78±0.8 43.52±1.0
+BWT(%)↓ — 18.50 ±0.8 08.06±1.2 06.77±1.2 05.97±0.8 08.25±0.8 08.03±0.8 07.12±0.4 07.16±0.4 03.46±0.4
+TIME(s)↓ — .1132 ±26. .6416±145. 0.7385 ±158. 50283±195 0.899±22. 0.912±23. .1286±27. .1293±28. 0.485±18.
+google / Gemma-2B-it
+OP(%)↑32.30±0.2 31.89±0.8 32.85±1.4 26.48±1.5 28.35±1.6 31.14±1.2 32.42±1.0 33.25±0.9 33.73±0.8 33.41±0.9
+BWT(%)↓ — 15.28 ±0.4 12.27±0.9 18.25±0.9 16.96±1.2 15.77±0.7 14.25±0.5 13.66±0.5 12.36±0.4 08.50±0.5
+TIME(s)↓ — 0.510 ±15. .2534±85. .2892±92. 17791±185 0.413±13. 0.415±13. 0.598±16. 0.592±16. 0.271±15.
+meta-llama / LLaMA-3.2-1B-Instruct
+OP(%)↑31.16±0.4 29.73±1.6 30.12±2.0 32.19±2.0 31.96±1.6 29.38±1.2 30.76±1.2 33.73±1.2 32.94±0.8 36.14±0.7
+BWT(%)↓ — 17.03 ±1.2 15.20±1.6 10.74±1.6 11.62±1.2 13.57±0.8 11.34±0.8 12.36±0.8 12.89±1.2 07.36±0.8
+TIME(s)↓ — 0.482 ±14. .1345±45. .1547±52. 08893±165 0.270±11. 0.281±11. 0.450±14. 0.448±14. 0.179±13.
+0,2,3,5,71, 4, 6Root Node0, 2, 73, 51: Financial policy classification4, 60, 27: German text simplification0: Chinese stance detection2: Meeting summarization4: Science reasoning6: Complex math reasoning5: Arithmetic reasoning3: Code completionUpdating the KD Tree with task 7...KD Tree updated successfully.Node(depth=0, tasks=[0, 1, 2, 3, 4, 5, 6, 7], mean_vector=[0.0010, 0.0020, ...], median_similarity=0.4941)Node(depth=1, tasks=[0, 2, 3, 5, 7], mean_vector=[-0.0031, 0.0125, ...], median_similarity=2.1875)Node(depth=2, tasks=[0, 2, 7], mean_vector=[0.0209, -0.0209, ...], median_similarity=5.0625)Node(depth=3, tasks=[0, 2], mean_vector=[-0.0156, 0.0078, ...], median_similarity=3.8438)Leaf(depth=4, tasks=[0])                # C-STANCE -中⽂零-shot⽴场检测数据集，基于新浪微博数据                                Leaf(depth=4, tasks=[2])                # MeetingBank-城市委员会会议⻓⽂本理解与摘要数据集                        Leaf(depth=3, tasks=[7])                # 20Minuten -德语⽂本简化数据集，⽤于⽣成德语摘要                Node(depth=2, tasks=[3, 5], mean_vector=[0.0000, 0.0000, ...], median_similarity=1.0625)Leaf(depth=3, tasks=[3])                # Py150 -Python代码补全数据集，包含15万个程序样本                        Leaf(depth=3, tasks=[5])                # NumGLUE-cm -数学推理任务，评估基础算术能⼒        Node(depth=1, tasks=[1, 4, 6], mean_vector=[0.0000, 0.0000, ...], median_similarity=0.4355)Node(depth=2, tasks=[4, 6], mean_vector=[0.0000, 0.0000, ...], median_similarity=0.6875)Leaf(depth=3, tasks=[4])                # ScienceQA-多跳科学问答数据集，评估科学知识和推理                        Leaf(depth=3, tasks=[6])                # NumGLUE-ds -⾼难度数学推理任务，处理复杂数学问题                Leaf(depth=2, tasks=[1])                # FOMC -⾦融领域任务，分析美联储⽂件的鹰派鸽派倾向C-STANCE: Chinese stance detectionFOMC: Financial policy classificationMeetingBank: Meeting summarizationPy150: Code completionScienceQA: Science reasoningNumGLUE-cm: Arithmetic reasoningNumGLUE-ds: Complex math reasoning20Minuten: German text simplification
+Figure 5: Visualization of the tree structure learned by our ap-
+proach, using Mistral-7B-Instruct-v0.3 as the foundation model.
+This is only marginally lower than the full 20-epoch train-
+ing (88.54%), while requiring only 11% of the training time.
+The rapid convergence can be attributed to our bandit-based
+search algorithm, which efficiently explores the tree struc-
+ture, as well as to TreeLoRA’s ability to facilitate knowledge
+transfer through its hierarchical design, allowing new tasks
+to leverage shared knowledge from previously learned ones.
+5.2. Evaluation on Large Language Models
+In this part, we evaluate the performance of our TreeLoRA
+on the large language models (LLMs).
+Dataset and Contenders. In this part, we employ the
+TRACE dataset (Wang et al., 2023c), a benchmark designed
+especially for continual learning with LLMs. It consists of
+8 distinct sub-datasets with 200, 000 samples, containing
+challenging tasks including multilingual capabilities, code
+generation, and mathematical reasoning.
+Model Architectures. We evaluate all methods on
+four different foundation LLMs: Mistral-7B-Instruct-v0.3,
+LLaMA-2-7B-chat, Gemma-2B-it, and LLaMA-3.2-1B-Table 4: Impact of the LoRA depth (aka tree depth in TreeLoRA)
+on the performance for O-LoRA and TreeLoRA, where we use
+meta-llama / LLaMA-2-7B-Chat as the foundation model.
+Depth O-LoRA TreeLoRA
+8 21.43 ±0.6 21.49 ±0.6
+16 22.05 ±0.8 22.62 ±0.9
+32 37.51 ±0.7 38.62 ±0.8
+64 42.78 ±0.8 43.52 ±1.0
+Instruct. These models represent a diverse range of architec-
+tures and parameter scales, allowing to assess efficiency and
+effectiveness across different model sizes and architectures.
+Results Analysis of LLMs Experiments. As shown
+in Table 3, TreeLoRA consistently achieves the best per-
+formance, outperforming other baselines and surpassing
+previous state-of-the-art methods, HiDeLoRA andO-LoRA .
+This superior performance can be attributed to TreeLoRA’s
+hierarchical task structure, which effectively captures and
+leverages shared knowledge between similar tasks, while
+separating conflicting tasks into different branches to al-
+leviate catastrophic forgetting. Notably, TreeLoRA also
+demonstrates superior computational efficiency, reducing
+training time by approximately 2.4 ×compared to other
+advanced methods across all model sizes.
+Visualization of the Learned Tree Structure. To answer
+question Q3, we visualize the hierarchical task structure
+learned by our approach. Figure 5 illustrates the hierar-
+chical task structure learned by TreeLoRA, using Mistral-
+7B-Instruct-v0.3 as the foundation model. The tree struc-
+ture effectively captures the semantic relationships between
+different tasks. For example, tasks with similar linguistic
+characteristics are grouped together: C-STANCE (Chinese
+8TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+Table 5: Ablation study of our approach. Penalty indicates the
+penalty term in Eq. (3).LCB-Search indicates our bandit search
+strategy based on lower confidence bound (LCB) for selecting the
+best task group as in Section 3.2.
+ID Penalty LCB-Search OP(%)
+(i) - - 51.92 ±1.3
+(ii)√- 54.03 ±1.2
+TreeLoRA√ √54.77±1.1
+stance detection) and MeetingBank (meeting summariza-
+tion) are placed under the same parent node, as they both
+involve understanding and analyzing natural language dis-
+course. Similarly, tasks requiring mathematical and logical
+reasoning capabilities, such as ScienceQA (science reason-
+ing) and NumGLUE-ds (complex math problems), are clus-
+tered nearby. This answers the research question Q3that
+the proposed TreeLoRA is able to capture the inherent task
+similarity structure effectively on the fly.
+Impact of Tree Depth. To further explore the impact of
+tree depth, we conducted experiments to validate how vary-
+ing tree depth affects the model’s performance and training
+efficiency. The results for LLM settings are reported in Ta-
+ble 4, which show that TreeLoRA is relatively robust to the
+choice of LoRA depth. TreeLoRA consistently outperforms
+O-LoRA across different LoRA depths, and a depth of 64 is
+recommended for the best trade-off between performance
+and efficiency. It is important to note that LoRA depth is
+not determined by the number of tasks, as a single node in
+the tree can contain multiple tasks, allowing it to scale to
+a large number of tasks. Additionally, the maximum tree
+depth should not exceed the number of transformer layers.
+Ablation Study. To validate each component’s contri-
+bution in TreeLoRA, we evaluate it on mistralai / Mistral-
+7B-Instruct-v0.3 with three variants: (i) a baseline model
+without the gradient-similarity penalty term or LCB-based
+searching, (ii) a model with only the penalty term but using
+a random search strategy, and (iii) our complete TreeLoRA
+approach with both the gradient-similarity penalty term and
+LCB-based search strategy. As shown in Table 5, both com-
+ponents contribute substantially to the overall performance.
+The penalty term improves performance by 2.11% (from
+51.92% to 54.03%), demonstrating its effectiveness in guid-
+ing sparse parameter updates. Adding the LCB-based search
+strategy further enhances performance, showing the value of
+bandit search strategy. When combined, these components
+work together to achieve the best performance, demonstrat-
+ing that both are crucial for TreeLoRA’s effectiveness.
+Hyperparameter Sensitivity Analysis. We conduct hy-
+perparameter sensitivity analysis to evaluate the robustness
+of TreeLoRA. Our analysis focuses on two key hyperparam-
+eters: regularization coefficient λ, and learning rate α. ForλTable 6: Hyperparameter sensitivity analysis on Split CIFAR-100.
+We report accuracy (%) with a standard deviation over three runs.
+Reg coeff λ Learning rate α
+0.1 88.54 ±0.05 0.001 87.97 ±0.05
+0.3 88.58 ±0.04 0.003 88.56 ±0.15
+0.5 88.51 ±0.03 0.005 88.54 ±0.05
+0.7 88.49 ±0.05 0.007 88.56 ±0.03
+1.0 88.52 ±0.02 0.010 88.34 ±0.17
+analysis, we fix the learning rate at default value α= 0.005
+but vary λfrom 0.1 to 1.0; while for learning rate analysis,
+we fix λ= 0.1but vary αfrom 0.001 to 0.010. Table 6
+summarizes our findings across different hyperparameter
+settings. Note that in our proposed TreeLoRA, the hyper-
+parameter of task-similarity threshold δin Eq. (2) does not
+need to be tuned, as it is automatically determined when we
+construct the K-D tree at the end of each task.
+The regularization coefficient ( λ) shows stability in model
+performance, with accuracy consistently around 88.50%
+across a wide range of values (0.1 to 1.0). This demon-
+strates TreeLoRA’s inherent robustness to this hyperparam-
+eter. Similarly, the learning rate ( α) exhibits stable perfor-
+mance within the range [0.003,0.007], with peak accuracy
+of 88.56% at both α= 0.003 andα= 0.007. While
+extremely small or large learning rates can affect the perfor-
+mance, TreeLoRA maintains consistent performance across
+a broad range of settings. Based on these experiments, we
+recommend default values of λ= 0.1andα= 0.005.
+Due to page limits, we defer more experiments including
+extended datasets, comparators, and models to Appendix A.
+6. Conclusion
+In this paper, we investigate the problem of efficient con-
+tinual learning, especially the approaches that are tailored
+to LPMs. We introduce TreeLoRA, a novel approach that
+constructs layer-wise adapters by leveraging hierarchical
+gradient similarity to facilitate efficient knowledge sharing
+across tasks. To deal with the computational challenge in
+task similarity estimation, we develop a bandit-based algo-
+rithm utilizing the lower confidence bound for efficient tree
+structure exploration, along with sparse gradient updates to
+better suit the LPMs. Theoretically, our approach enjoys
+tighter regret bounds compared to conventional bandit meth-
+ods that do not employ the tree structure. Experiments on
+both vision transformers and large language models validate
+the effectiveness and efficiency of our approach, with up to
+3.2×speedup for ViTs and 2.4 ×speedup for LLMs, while
+maintaining or even improving the performance. In the fu-
+ture, we plan to extend our framework to consider the more
+challenging problem of evolving task relationships, where
+the task structure is time-varying.
+9TreeLoRA: Efficient Continual Learning via Layer-Wise LoRAs Guided by a Hierarchical Gradient-Similarity Tree
+Acknowledgements
+This research was supported by National Science Founda-
+tion of China (U23A20382, 62176117) and Postgraduate Re-
+search & Practice Innovation Program of Jiangsu Province
+(KYCX25_0323).
+Impact Statement
+This paper proposes an efficient continual learning method
+that could significantly reduce computational resources for
+fine-tuning, which improves efficiency and sustainability
+in AI development. By reducing computational demands,
+our method may help to decrease energy consumption and
+carbon emissions associated with training AI models, con-
+tributing to environmentally sustainable machine learning.
+References
+Aggarwal, C. C., Hinneburg, A., and Keim, D. A. On the
+surprising behavior of distance metrics in high dimen-
+sional spaces. In Proceedings of the 8th International
+Conference on Database Theory (ICDT) , Lecture Notes
+in Computer Science, pp. 420–434, 2001.
+Aljundi, R., Babiloni, F., Elhoseiny, M., Rohrbach, M., and
+Tuytelaars, T. Memory aware synapses: Learning what
+(not) to forget. In Proceedings of the 15th European
+Conference on Computer Vision (ECCV) , pp. 139–154,
+2018.
+Bai, Y ., Zhang, Y .-J., Zhao, P., Sugiyama, M., and Zhou, Z.-
+H. Adapting to online label shift with provable guarantees.
+InAdvances in Neural Information Processing Systems
+35 (NeurIPS) , pp. 29960–29974, 2022.
+Bailey, B. Tree-based data replay for more efficient LLM
+continual learning. Master’s thesis, Massachusetts Insti-
+tute of Technology, 2024.
+Bengio, Y ., Lecun, Y ., and Hinton, G. Deep learning for AI.
+Communication of ACM , 64(7):58–65, 2021.
+Bentley, J. L. K-d trees for semidynamic point sets. In Pro-
+ceedings of the 6th Annual Symposium on Computational
+Geometry , pp. 187–197, 1990.
+Brown, T. B., Mann, B., Ryder, N., Subbiah, M., Kaplan,
+J., Dhariwal, P., Neelakantan, A., Shyam, P., Sastry, G.,
+Askell, A., Agarwal, S., Herbert-V oss, A., Krueger, G.,
+Henighan, T., Child, R., Ramesh, A., Ziegler, D. M., Wu,
+J., Winter, C., Hesse, C., Chen, M., Sigler, E., Litwin, M.,
+Gray, S., Chess, B., Clark, J., Berner, C., McCandlish,
+S., Radford, A., Sutskever, I., and Amodei, D. Language
+models are few-shot learners. In Advances in Neural
+Information Processing Systems 33 (NeurIPS) , pp. 1877–
+1901, 2020.Bubeck, S. and Cesa-Bianchi, N. Regret analysis of stochas-
+tic and nonstochastic multi-armed bandit problems. Foun-
+dations and Trends in Machine Learning , 5(1):1–122,
+2012.
+Coquelin, P. and Munos, R. Bandit algorithms for tree
+search. In Proceedings of the 23rd Conference on Uncer-
+tainty in Artificial Intelligence (UAI) , pp. 67–74, 2007.
+Dettmers, T., Pagnoni, A., Holtzman, A., and Zettlemoyer, L.
+QLoRA: Efficient finetuning of quantized LLMs. In Pro-
+ceedings of the 11th International Conference on Learn-
+ing Representations (ICLR) , 2023.
+Dohare, S., Hernandez-Garcia, J. F., Lan, Q., Rahman, P.,
+Mahmood, A. R., and Sutton, R. S. Loss of plasticity
+in deep continual learning. Nature , 632(8026):768–774,
+2024.
+Dou, S., Zhou, E., Liu, Y ., Gao, S., Shen, W., Xiong, L.,
+Zhou, Y ., Wang, X., Xi, Z., Fan, X., Pu, S., Zhu, J.,
+Zheng, R., Gui, T., Zhang, Q., and Huang, X. Loramoe:
+Alleviating world knowledge forgetting in large language
+models via moe-style plugin. In Proceedings of the 62nd
+Annual Meeting of the Association for Computational
+Linguistics (ACL) , pp. 1932–1945, 2024.
+Evron, I., Moroshko, E., Ward, R. A., Srebro, N., and
+Soudry, D. How catastrophic can catastrophic forget-
+ting be in linear regression? In Proceedings of 35th
+Conference on Learning Theory (COLT) , pp. 4028–4079,
+2022.
+Feng, Y ., Chu, X., Xu, Y ., Shi, G., Liu, B., and Wu, X. TaSL:
+Continual dialog state tracking via task skill localization
+and consolidation. In Proceedings of the 62nd Annual
+Meeting of the Association for Computational Linguistics
+(ACL) , pp. 1266–1279, 2024.
+French, R. M. Catastrophic interference in connectionist
+networks: Can it be predicted, can it be prevented? In
+Advances in Neural Information Processing Systems 6
+(NIPS) , pp. 1176–1177, 1993.
+Garivier, A. and Moulines, E. On upper-confidence bound
+policies for switching bandit problems. In Proceedings of
+the 22nd International Conference on Algorithmic Learn-
+ing Theory (ALT) , pp. 174–188, 2011.
+Hu, E. J., Shen, Y ., Wallis, P., Allen-Zhu, Z., Li, Y ., Wang,
+S., Wang, L., and Chen, W. LoRA: Low-rank adaptation
+of large language models. In Proceedings of the 10th
+International Conference on Learning Representations
+(ICLR) , 2022.
+Hu, E. J., Shen, Y ., Wallis, P., Allen-Zhu, Z., Li, Y ., Wang,
+S., Wang, L., and Chen, W. AdaLoRA: Adaptive budget
+10
