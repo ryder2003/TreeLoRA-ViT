@@ -17,11 +17,17 @@ data/
 runs/**/*.pt
 runs/**/*.pth
 runs/**/*.ckpt
+runs_class_incremental/**/*.pt
+runs_class_incremental/**/*.pth
+runs_class_incremental/**/*.ckpt
 
 # Keep JSON and text results
 !runs/**/*.json
 !runs/**/*.txt
 !runs/**/*.png
+!runs_class_incremental/**/*.json
+!runs_class_incremental/**/*.txt
+!runs_class_incremental/**/*.png
 
 # IDE
 .vscode/

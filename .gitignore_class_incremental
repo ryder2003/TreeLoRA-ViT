@@ -1,0 +1,17 @@
+# Exclude large checkpoint files from git
+runs_class_incremental/**/model_state.pt
+runs_class_incremental/**/tree_state.pt
+runs_class_incremental/**/task_heads.pt
+
+# Keep JSON and text results (small files)
+!runs_class_incremental/**/*.json
+!runs_class_incremental/**/*.txt
+!runs_class_incremental/**/*.png
+
+# Also exclude original runs if needed
+runs/**/model_state.pt
+runs/**/tree_state.pt
+runs/**/task_heads.pt
+!runs/**/*.json
+!runs/**/*.txt
+!runs/**/*.png
