@@ -375,8 +375,8 @@ class TreeLoRALearner:
                         reg_loss = self.tree.get_loss(
                             _grad_current, loss, task_id, prev_id_matrix
                         )
-                        # Official pattern: loss = loss - reg_loss
-                        loss = loss - reg_loss
+                        # Add regularisation loss mapped exactly to the gradient alignment
+                        loss = loss + reg_loss
                 elif self.reg > 0 and task_id == 0:
                     # For first task, still collect gradients but no regularization
                     lora_A_params = self._collect_lora_A_live()

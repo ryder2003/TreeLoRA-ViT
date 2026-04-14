@@ -341,11 +341,9 @@ class KD_LoRA_Tree:
             lora_grads, self.all_grad_device, task_id, prev_id_matrix
         )
         # Adaptive scaling so regularisation is on the same scale as task loss
-        # Official pattern: reg_loss / (reg_loss.detach().clone() + 1e-5) * loss.detach().clone() * tmp_reg
-        # Using .clone() preserves sign, which is critical for
-        # correct regularisation direction.
+        # We need to use .abs() to preserve the proper optimization direction
         reg_loss = (
-            reg_loss / (reg_loss.detach().clone() + 1e-5)
+            reg_loss / (reg_loss.detach().abs() + 1e-5)
             * task_loss.detach().clone()
             * self.tmp_reg
         )
