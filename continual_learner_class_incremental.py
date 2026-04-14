@@ -220,10 +220,10 @@ class ClassIncrementalTreeLoRALearner:
               f"{(task_id + 1) * self.classes_per_task - 1}")
         print(f"{'='*60}")
 
-        # Only reset LoRA for first task
-        if task_id == 0:
-            reset_all_lora(self.model)
-            print("  LoRA initialized for first task")
+        # CRITICAL: Reset LoRA for EVERY task (paper's approach)
+        # Tree regularization provides knowledge transfer
+        reset_all_lora(self.model)
+        print("  LoRA re-initialized for this task")
 
         optimizer = self._make_optimizer()
         scheduler = CosineAnnealingLR(

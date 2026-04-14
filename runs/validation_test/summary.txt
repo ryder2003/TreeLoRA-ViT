@@ -1,0 +1,14 @@
+============================================================
+TreeLoRA ViT-B/16 - Final Results
+============================================================
+
+Average Accuracy (Acc) : 91.91%
+Backward Transfer (BWT): -2.76%
+Training time          : 216.1 min (12967s)
+Tasks                  : 2
+Classes per task       : 50
+
+Accuracy Matrix (rows = after training task T, cols = task evaluated):
+         T00  T01
+  T00:   93.7    ---
+  T01:   91.0   92.9  

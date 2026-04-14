@@ -65,8 +65,8 @@ def parse_args():
     p.add_argument("--lora_depth", type=int, default=5, help="KD-tree depth")
 
     # Training
-    p.add_argument("--reg", type=float, default=1.5,
-                   help="Regularization strength (1.0-2.0 recommended)")
+    p.add_argument("--reg", type=float, default=2.0,
+                   help="Regularization strength (1.5-2.5 recommended for class-incremental)")
     p.add_argument("--epochs", type=int, default=10, help="Epochs per task")
     p.add_argument("--batch_size", type=int, default=64, help="Batch size")
     p.add_argument("--lr", type=float, default=3e-3, help="Learning rate")

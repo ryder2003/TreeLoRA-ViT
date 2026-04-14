@@ -1,0 +1,42 @@
+[
+  {
+    "task_id": 0,
+    "epochs": [
+      {
+        "epoch": 1,
+        "avg_loss": 1.1264,
+        "train_acc": 69.64
+      },
+      {
+        "epoch": 2,
+        "avg_loss": 0.7871,
+        "train_acc": 78.07
+      },
+      {
+        "epoch": 3,
+        "avg_loss": 0.6336,
+        "train_acc": 81.8
+      }
+    ]
+  },
+  {
+    "task_id": 1,
+    "epochs": [
+      {
+        "epoch": 1,
+        "avg_loss": 0.6048,
+        "train_acc": 71.18
+      },
+      {
+        "epoch": 2,
+        "avg_loss": 0.3928,
+        "train_acc": 78.48
+      },
+      {
+        "epoch": 3,
+        "avg_loss": 0.3204,
+        "train_acc": 81.94
+      }
+    ]
+  }
+]
