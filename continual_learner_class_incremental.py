@@ -260,7 +260,21 @@ class ClassIncrementalTreeLoRALearner:
 
                 # Forward pass
                 logits = self.model(images)
-                loss = criterion(logits, labels)
+
+                # CRITICAL: Logit masking for class-incremental learning.
+                # Only current task's classes participate in the softmax.
+                # Without this, the CE gradient actively pushes DOWN logits
+                # for past-task classes, destroying their head weights.
+                # This is standard practice in L2P, DualPrompt, HiDeLoRA.
+                task_start = task_id * self.classes_per_task
+                task_end = (task_id + 1) * self.classes_per_task
+                mask = torch.full_like(logits, float('-inf'))
+                mask[:, task_start:task_end] = 0.0
+                logits_masked = logits + mask
+
+                # Remap labels to [0, classes_per_task) for masked softmax
+                labels_local = labels - task_start
+                loss = criterion(logits_masked[:, task_start:task_end], labels_local)
 
                 # TreeLoRA regularization
                 if self.reg > 0 and task_id > 0:
@@ -297,7 +311,7 @@ class ClassIncrementalTreeLoRALearner:
                 optimizer.step()
 
                 running_loss += loss.item()
-                preds = logits.argmax(dim=1)
+                preds = logits.argmax(dim=1)  # Use unmasked logits for acc
                 correct += (preds == labels).sum().item()
                 total += labels.size(0)
 
@@ -325,12 +339,14 @@ class ClassIncrementalTreeLoRALearner:
         if self.reg > 0:
             self.tree.end_task(task_id)
 
-        # CRITICAL: Merge current LoRA into base weights before resetting.
-        # This is how TreeLoRA accumulates knowledge across tasks.
-        # Without this step, resetting LoRA erases all task knowledge,
-        # making the model equivalent to SeqLoRA (~10% accuracy).
+        # CRITICAL: Merge current LoRA into base weights, then reset to zero.
+        # This is how TreeLoRA accumulates knowledge across tasks (paper Eq.3).
+        # The merge bakes ΔW into the base: W_base += scaling * B @ A
+        # The reset zeroes out LoRA so evaluation computes (W+ΔW)@x correctly,
+        # NOT (W+ΔW)@x + ΔW@x (double-counting bug).
         merge_lora_to_base(self.model)
-        print(f"  Knowledge from task {task_id} permanently merged into base model")
+        reset_all_lora(self.model)
+        print(f"  Task {task_id} knowledge merged into base & LoRA zeroed for eval")
 
     @torch.no_grad()
     def evaluate_task(self, task_id: int, test_loader) -> float:
