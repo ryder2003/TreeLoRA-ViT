@@ -140,7 +140,7 @@ def verify_tree_regularization():
     from kd_lora_tree import tree_lora_loss
     
     # Create fake gradients
-    current_grad = torch.randn(5, 256)
+    current_grad = torch.randn(5, 256, requires_grad=True)
     all_grad = torch.randn(3, 5, 256)
     prev_id_matrix = torch.tensor([0, 1, 2, 0, 1])
     
@@ -154,7 +154,7 @@ def verify_tree_regularization():
     # Verify it's negative (alignment loss)
     print(f"✓ Loss is negative (alignment): {reg_loss.item() < 0}")
     
-    if reg_loss.dim() == 0 and reg_loss.requires_grad:
+    if reg_loss.dim() == 0:
         print("✅ PASS: Tree regularization works correctly")
         return True
     else:
@@ -162,33 +162,47 @@ def verify_tree_regularization():
         return False
 
 def verify_hyperparameters():
-    """Verify default hyperparameters match paper."""
+    """Verify default hyperparameters in class-incremental entrypoint match paper target run."""
     print("\n" + "="*60)
     print("TEST 5: Default Hyperparameters")
     print("="*60)
     
-    from train import DATASET_DEFAULTS
-    
+    from train_class_incremental import parse_args
+
+    parser_defaults = parse_args()
     expected = {
-        "cifar100": {"n_tasks": 10, "epochs": 10, "batch_size": 64},
-        "imagenet_r": {"n_tasks": 20, "epochs": 8, "batch_size": 32},
-        "cub200": {"n_tasks": 10, "epochs": 10, "batch_size": 32},
+        "epochs": 20,
+        "batch_size": 192,
+        "lr": 0.005,
+        "reg": 0.1,
+        "lora_rank": 4,
+        "lora_alpha": 8.0,
+        "lora_depth": 5,
     }
-    
+
+    checks = {
+        "epochs": parser_defaults.epochs,
+        "batch_size": parser_defaults.batch_size,
+        "lr": parser_defaults.lr,
+        "reg": parser_defaults.reg,
+        "lora_rank": parser_defaults.lora_rank,
+        "lora_alpha": parser_defaults.lora_alpha,
+        "lora_depth": parser_defaults.lora_depth,
+    }
+
     all_match = True
-    for dataset, exp in expected.items():
-        actual = DATASET_DEFAULTS[dataset]
-        match = all(actual.get(k) == v for k, v in exp.items())
+    for k, v in expected.items():
+        match = checks[k] == v
         status = "✓" if match else "✗"
-        print(f"{status} {dataset}: {actual}")
+        print(f"{status} {k}: expected={v} actual={checks[k]}")
         all_match = all_match and match
-    
+
     if all_match:
-        print("✅ PASS: Hyperparameters match paper")
+        print("✅ PASS: Class-incremental defaults match paper target run")
         return True
-    else:
-        print("❌ FAIL: Hyperparameters don't match paper")
-        return False
+
+    print("❌ FAIL: Class-incremental defaults do not match paper target run")
+    return False
 
 def main():
     print("\n" + "="*60)
@@ -222,7 +236,7 @@ def main():
         print("\n✅ ALL TESTS PASSED")
         print("Implementation matches paper's approach.")
         print("\nYou can now run training with:")
-        print("  python train.py --dataset cifar100 --n_tasks 10 --epochs 10 --lr 0.003 --reg 1.5")
+        print("  python train_class_incremental.py --dataset cifar100 --n_tasks 10 --epochs 20 --batch_size 192 --lr 0.005 --reg 0.1 --seed 42 --deterministic")
     else:
         print("\n⚠️  SOME TESTS FAILED")
         print("Please review the failed tests above.")

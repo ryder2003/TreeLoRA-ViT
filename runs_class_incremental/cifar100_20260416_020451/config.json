@@ -1,0 +1,21 @@
+{
+  "dataset": "cifar100",
+  "data_root": "./data",
+  "n_tasks": 2,
+  "no_pretrained": true,
+  "lora_rank": 4,
+  "lora_alpha": 8.0,
+  "lora_depth": 5,
+  "reg": 0.1,
+  "epochs": 1,
+  "batch_size": 16,
+  "lr": 0.005,
+  "num_workers": 0,
+  "seed": 42,
+  "deterministic": true,
+  "device": "cuda",
+  "output_dir": "runs_class_incremental\\cifar100_20260416_020451",
+  "total_classes": 100,
+  "classes_per_task": 50,
+  "evaluation_protocol": "class_incremental"
+}

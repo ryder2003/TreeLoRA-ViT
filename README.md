@@ -40,6 +40,16 @@ ImageNet-R and CUB-200 require manual downloading and placement into the `./data
 
 Use `train.py` to initiate the continual learning process. The script will automatically train task by task and evaluate the performance sequentially.
 
+### Paper Reproduction (Strict Protocol)
+
+For paper-target reproduction, use the class-incremental entrypoint:
+
+```bash
+python train_class_incremental.py --dataset cifar100 --n_tasks 10 --epochs 20 --batch_size 192 --lr 0.005 --reg 0.1 --seed 42 --deterministic
+```
+
+See `TRAINING_COMMANDS_PAPER.md` for the full 3-seed run commands and acceptance criteria.
+
 ### General Usage
 ```bash
 python train.py --dataset [dataset_name] --n_tasks [num_tasks] --epochs [num_epochs]

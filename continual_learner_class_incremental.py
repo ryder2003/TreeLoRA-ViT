@@ -103,11 +103,19 @@ class ClassIncrementalTreeLoRALearner:
         if self.output_dir:
             os.makedirs(self.output_dir, exist_ok=True)
 
+    def _assert_protocol_integrity(self):
+        """Fail fast if class-incremental protocol assumptions are violated."""
+        if self.model.head.out_features != self.total_classes:
+            raise RuntimeError(
+                "Protocol violation: unified head size must equal total_classes "
+                f"({self.total_classes}), got {self.model.head.out_features}."
+            )
+
     def _make_optimizer(self):
         """Optimizer over LoRA params + unified head."""
         params = list(get_lora_params(self.model))
         param_tensors = [p for _, p in params] + list(self.model.head.parameters())
-        return torch.optim.Adam(param_tensors, lr=self.lr)
+        return torch.optim.Adam(param_tensors, lr=self.lr, betas=(0.9, 0.999), eps=1e-8)
 
     def _collect_lora_A_live(self):
         """Collect LoRA-A parameters as live tensors."""
@@ -231,6 +239,7 @@ class ClassIncrementalTreeLoRALearner:
 
         criterion = nn.CrossEntropyLoss()
         self.model.train()
+        self._assert_protocol_integrity()
 
         task_log = {
             "task_id": task_id,
@@ -261,20 +270,9 @@ class ClassIncrementalTreeLoRALearner:
                 # Forward pass
                 logits = self.model(images)
 
-                # CRITICAL: Logit masking for class-incremental learning.
-                # Only current task's classes participate in the softmax.
-                # Without this, the CE gradient actively pushes DOWN logits
-                # for past-task classes, destroying their head weights.
-                # This is standard practice in L2P, DualPrompt, HiDeLoRA.
-                task_start = task_id * self.classes_per_task
-                task_end = (task_id + 1) * self.classes_per_task
-                mask = torch.full_like(logits, float('-inf'))
-                mask[:, task_start:task_end] = 0.0
-                logits_masked = logits + mask
-
-                # Remap labels to [0, classes_per_task) for masked softmax
-                labels_local = labels - task_start
-                loss = criterion(logits_masked[:, task_start:task_end], labels_local)
+                # Strict class-incremental optimization: single unified head,
+                # global labels, and no task-dependent masking/remapping.
+                loss = criterion(logits, labels)
 
                 # TreeLoRA regularization
                 if self.reg > 0 and task_id > 0:

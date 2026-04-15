@@ -25,8 +25,8 @@ class KDTreeNode:
     One node in the hierarchical gradient-similarity KD-tree.
 
     At each depth level the node uses the gradient vectors at that depth
-    to split tasks into two children based on cosine similarity to the
-    mean vector.
+    to split tasks into two children based on L1-distance to the mean
+    vector (paper-consistent similarity criterion).
 
     Args:
         task_indices  : global task indices contained in this node
@@ -58,19 +58,21 @@ class KDTreeNode:
         # Mean vector for this split dimension
         self.mean_vector = current_grads.mean(dim=0)                # (D,)
 
-        # Inner-product similarity to mean (proxy for cosine similarity)
-        similarities = torch.mv(current_grads, self.mean_vector)    # (N,)
+        # L1 distance to the mean vector (smaller is more similar)
+        similarities = torch.norm(
+            current_grads - self.mean_vector.unsqueeze(0), p=1, dim=1
+        )
         self.median_similarity = torch.median(similarities).item()
 
         left_indices = [
             self.task_indices[i]
             for i in range(len(self.task_indices))
-            if similarities[i].item() >= self.median_similarity
+            if similarities[i].item() <= self.median_similarity
         ]
         right_indices = [
             self.task_indices[i]
             for i in range(len(self.task_indices))
-            if similarities[i].item() < self.median_similarity
+            if similarities[i].item() > self.median_similarity
         ]
 
         # Avoid degenerate splits
@@ -194,18 +196,16 @@ class KD_LoRA_Tree:
         """
         Accumulate LoRA parameter estimates averaged over the epoch.
 
-        Matches the official repo: loops lora_depth times per step.
-        This is consistent with the official ZinYY/TreeLoRA implementation.
+        Tracks the mean LoRA gradient estimate over one epoch.
 
         Args:
             lora_grads : (lora_depth, feature_dim)  current-step LoRA-A values
         """
-        for i in range(len(lora_grads)):
-            if self.current_grad is None:
-                self.current_grad = lora_grads.detach() * 1.0 / self.total_rounds
-            else:
-                frac = 1.0 / self.total_rounds
-                self.current_grad += lora_grads.detach() * frac
+        frac = 1.0 / self.total_rounds
+        if self.current_grad is None:
+            self.current_grad = lora_grads.detach() * frac
+        else:
+            self.current_grad += lora_grads.detach() * frac
 
     # ------------------------------------------------------------------
     # Tree search (LCB bandit)
@@ -225,7 +225,7 @@ class KD_LoRA_Tree:
             self.all_grad = valid_grads.to(device, non_blocking=True)
             self.all_grad_device = self.all_grad
 
-        lora_d = self.all_grad.shape[1]
+        lora_d = min(self.lora_depth, self.all_grad.shape[1])
         if self.sim is None:
             self.sim = torch.zeros(task_id, lora_d, device=device)
             self.num_of_selected = torch.zeros(self.num_tasks, lora_d, device=device)
@@ -316,7 +316,8 @@ class KD_LoRA_Tree:
         if self.sim is None:
             return
         for depth_idx, prev_id in enumerate(prev_id_matrix):
-            self.sim[prev_id, depth_idx] -= torch.sum(
+            # Accumulate distance (not negative distance): lower is better.
+            self.sim[prev_id, depth_idx] += torch.sum(
                 torch.abs(
                     self.current_grad[depth_idx]
                     - self.all_grad[prev_id, depth_idx]
@@ -388,8 +389,9 @@ class KD_LoRA_Tree:
             if g is not None
         ]
 
-        # Tree depth derived from actual gradient shape (matches official repo)
-        lora_depth = self.current_grad.shape[0]
+        # Enforce configured max depth while respecting available tensor depth.
+        lora_depth = min(self.lora_depth, grads_tensor.shape[1])
+        grads_tensor = grads_tensor[:, :lora_depth, :]
 
         self.kd_tree_root = KDTreeNode(
             task_indices=task_ids,
