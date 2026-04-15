@@ -204,6 +204,43 @@ def get_lora_params(model: nn.Module):
             yield name, param
 
 
+def merge_lora_to_base(model: nn.Module):
+    """
+    Merge current LoRA adapter deltas into the frozen base QKV weights.
+
+    This is the CRITICAL step for continual learning:
+      W_base_q += scaling * B_q @ A_q
+      W_base_v += scaling * B_v @ A_v
+
+    After merging, the base model permanently contains knowledge from
+    the current task. The LoRA parameters should then be reset for the
+    next task.
+
+    This matches the paper's Equation (3) and Figure 3:
+      "the updated model is obtained based on the previously learned
+       model parameters and assembling the newly learned sparse update part"
+    """
+    vit = model.vit if hasattr(model, "vit") else model
+    merge_count = 0
+    for block in vit.blocks:
+        attn = block.attn
+        if hasattr(attn, "qkv") and isinstance(attn.qkv, LoRAQKV):
+            lora_qkv = attn.qkv
+            with torch.no_grad():
+                s = lora_qkv.slice  # 768 for ViT-B/16
+                # Delta for Q:  scaling * B_q @ A_q  -> shape (768, 768)
+                delta_q = lora_qkv.scaling * (lora_qkv.loranew_B @ lora_qkv.loranew_A)
+                # Delta for V:  scaling * B_v @ A_v  -> shape (768, 768)
+                delta_v = lora_qkv.scaling * (lora_qkv.loranew_B_v @ lora_qkv.loranew_A_v)
+
+                # Merge into the fused QKV weight:  [Q | K | V]
+                lora_qkv.base_qkv.weight.data[:s, :] += delta_q
+                lora_qkv.base_qkv.weight.data[2*s:, :] += delta_v
+            merge_count += 1
+    if merge_count > 0:
+        print(f"  LoRA merged into base weights in {merge_count} blocks")
+
+
 def reset_all_lora(model: nn.Module):
     """
     Re-initialize all LoRA adapter parameters in the model.

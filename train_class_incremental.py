@@ -65,11 +65,11 @@ def parse_args():
     p.add_argument("--lora_depth", type=int, default=5, help="KD-tree depth")
 
     # Training
-    p.add_argument("--reg", type=float, default=2.0,
-                   help="Regularization strength (1.5-2.5 recommended for class-incremental)")
-    p.add_argument("--epochs", type=int, default=10, help="Epochs per task")
+    p.add_argument("--reg", type=float, default=0.5,
+                   help="Regularization strength (paper default 0.1-1.0, all give ~88.5%%)")
+    p.add_argument("--epochs", type=int, default=20, help="Epochs per task (paper: 20 for CIFAR-100)")
     p.add_argument("--batch_size", type=int, default=64, help="Batch size")
-    p.add_argument("--lr", type=float, default=3e-3, help="Learning rate")
+    p.add_argument("--lr", type=float, default=5e-3, help="Learning rate (paper default 0.005)")
     p.add_argument("--num_workers", type=int, default=4, help="DataLoader workers")
 
     # Device
@@ -203,9 +203,9 @@ def main():
 
     # Expected performance comparison
     expected = {
-        "cifar100": {"acc": "65-70%", "bwt": "-8% to -12%"},
-        "imagenet_r": {"acc": "55-60%", "bwt": "-12% to -18%"},
-        "cub200": {"acc": "60-65%", "bwt": "-10% to -15%"},
+        "cifar100": {"acc": "~88.54%", "bwt": "~-4.37%"},
+        "imagenet_r": {"acc": "~71.94%", "bwt": "~-4.06%"},
+        "cub200": {"acc": "~73.66%", "bwt": "~-4.87%"},
     }
     exp = expected[args.dataset]
     print(f"  Expected (from paper): Acc={exp['acc']}, BWT={exp['bwt']}\n")

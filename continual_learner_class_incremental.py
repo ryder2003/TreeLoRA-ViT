@@ -17,11 +17,10 @@ import os
 import time
 import torch
 import torch.nn as nn
-from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from vit_backbone import ViTBackbone
-from lora import inject_lora_to_vit, get_lora_params, reset_all_lora
+from lora import inject_lora_to_vit, get_lora_params, reset_all_lora, merge_lora_to_base
 from kd_lora_tree import KD_LoRA_Tree
 
 
@@ -63,7 +62,7 @@ class ClassIncrementalTreeLoRALearner:
         lora_rank: int = 4,
         lora_alpha: float = 8.0,
         lora_depth: int = 5,
-        reg: float = 1.0,
+        reg: float = 0.5,
         lr: float = 5e-3,
         device: torch.device = None,
         pretrained: bool = True,
@@ -226,11 +225,9 @@ class ClassIncrementalTreeLoRALearner:
         print("  LoRA re-initialized for this task")
 
         optimizer = self._make_optimizer()
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=epochs * len(train_loader),
-            eta_min=self.lr * 0.01,
-        )
+        # Paper Appendix A.3: constant learning rate (no cosine annealing)
+        # "optimized using Adam with beta1=0.9 and beta2=0.999, utilizing
+        #  a batch size of 192 and a constant learning rate at 0.005"
 
         criterion = nn.CrossEntropyLoss()
         self.model.train()
@@ -277,9 +274,10 @@ class ClassIncrementalTreeLoRALearner:
                         reg_loss = self.tree.get_loss(
                             _grad_current, loss, task_id, prev_id_matrix
                         )
-                        # We ADD the reg_loss, since tree_lora_loss returns -dot_product
-                        # Minimizing (loss + reg_loss) will push the dot_product to be POSITIVE
-                        loss = loss + reg_loss
+                        # Official repo: loss = loss - reg_loss
+                        # This creates a mean-reverting gradient that stabilises
+                        # similarity between current and previous task adapters
+                        loss = loss - reg_loss
                 elif self.reg > 0 and task_id == 0:
                     lora_A_params = self._collect_lora_A_live()
                     if lora_A_params is not None:
@@ -297,7 +295,6 @@ class ClassIncrementalTreeLoRALearner:
                 )
 
                 optimizer.step()
-                scheduler.step()
 
                 running_loss += loss.item()
                 preds = logits.argmax(dim=1)
@@ -327,6 +324,13 @@ class ClassIncrementalTreeLoRALearner:
         # End of task: store gradients and rebuild tree
         if self.reg > 0:
             self.tree.end_task(task_id)
+
+        # CRITICAL: Merge current LoRA into base weights before resetting.
+        # This is how TreeLoRA accumulates knowledge across tasks.
+        # Without this step, resetting LoRA erases all task knowledge,
+        # making the model equivalent to SeqLoRA (~10% accuracy).
+        merge_lora_to_base(self.model)
+        print(f"  Knowledge from task {task_id} permanently merged into base model")
 
     @torch.no_grad()
     def evaluate_task(self, task_id: int, test_loader) -> float:

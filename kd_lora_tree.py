@@ -194,17 +194,18 @@ class KD_LoRA_Tree:
         """
         Accumulate LoRA parameter estimates averaged over the epoch.
 
-        Fixed version: accumulate once per step, not lora_depth times.
-        The original implementation had a bug that amplified gradients.
+        Matches the official repo: loops lora_depth times per step.
+        This is consistent with the official ZinYY/TreeLoRA implementation.
 
         Args:
             lora_grads : (lora_depth, feature_dim)  current-step LoRA-A values
         """
-        frac = 1.0 / self.total_rounds
-        if self.current_grad is None:
-            self.current_grad = lora_grads.detach() * frac
-        else:
-            self.current_grad += lora_grads.detach() * frac
+        for i in range(len(lora_grads)):
+            if self.current_grad is None:
+                self.current_grad = lora_grads.detach() * 1.0 / self.total_rounds
+            else:
+                frac = 1.0 / self.total_rounds
+                self.current_grad += lora_grads.detach() * frac
 
     # ------------------------------------------------------------------
     # Tree search (LCB bandit)
@@ -340,10 +341,11 @@ class KD_LoRA_Tree:
         reg_loss = tree_lora_loss(
             lora_grads, self.all_grad_device, task_id, prev_id_matrix
         )
-        # Adaptive scaling so regularisation is on the same scale as task loss
-        # We need to use .abs() to preserve the proper optimization direction
+        # Adaptive scaling matching official repo (ZinYY/TreeLoRA):
+        # reg_loss / (reg_loss.detach().clone() + 1e-5)  ≈ 1.0 for large |reg_loss|
+        # This normalizes to the scale of the task loss
         reg_loss = (
-            reg_loss / (reg_loss.detach().abs() + 1e-5)
+            reg_loss / (reg_loss.detach().clone() + 1e-5)
             * task_loss.detach().clone()
             * self.tmp_reg
         )
