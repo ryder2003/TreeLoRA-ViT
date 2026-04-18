@@ -84,6 +84,7 @@ def inject_lora_to_vit(
     model: nn.Module,
     rank: int = 4,
     alpha: float = 8.0,
+    max_blocks: int = None,
     verbose: bool = True,
 ) -> nn.Module:
     """
@@ -108,6 +109,8 @@ def inject_lora_to_vit(
 
     injected = 0
     for block_idx, block in enumerate(vit.blocks):
+        if max_blocks is not None and injected >= max_blocks:
+            break
         attn = block.attn
 
         # timm ViT fuses Q, K, V into a single qkv linear layer
@@ -127,7 +130,11 @@ def inject_lora_to_vit(
         injected += 1
 
     if verbose:
-        print(f"LoRA injected into {injected} transformer blocks "
+        if max_blocks is None:
+            depth_msg = f"{injected} transformer blocks"
+        else:
+            depth_msg = f"{injected}/{len(vit.blocks)} transformer blocks (depth cap={max_blocks})"
+        print(f"LoRA injected into {depth_msg} "
               f"(rank={rank}, alpha={alpha}, scaling={alpha/rank:.2f})")
         # Count trainable vs total parameters
         total = sum(p.numel() for p in model.parameters())

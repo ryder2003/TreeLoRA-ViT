@@ -1,0 +1,12 @@
+[
+  {
+    "task_id": 0,
+    "epochs": [
+      {
+        "epoch": 1,
+        "avg_loss": 4.1126,
+        "train_acc": 4.7
+      }
+    ]
+  }
+]

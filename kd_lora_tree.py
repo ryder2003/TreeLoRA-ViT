@@ -227,85 +227,36 @@ class KD_LoRA_Tree:
 
         lora_d = min(self.lora_depth, self.all_grad.shape[1])
         if self.sim is None:
-            self.sim = torch.zeros(task_id, lora_d, device=device)
-            self.num_of_selected = torch.zeros(self.num_tasks, lora_d, device=device)
+            self.sim = torch.zeros((task_id, lora_d), device=device)
+            self.num_of_selected = torch.zeros((self.num_tasks, lora_d), device=device)
 
-        # Average distance computed from tracking
-        mu = self.sim.clone() 
+        # Official-style similarity bookkeeping:
+        # self.sim stores accumulated negative L1-distance for selected arms.
+        sim = self.sim.clone()
         valid_mask = self.num_of_selected[:task_id, :] > 0
-        mu[valid_mask] = mu[valid_mask] / self.num_of_selected[:task_id, :][valid_mask]
-        
-        # Determine t for the bandit calculation
-        # total_rounds = train_dataloader_len
-        # tmp_rounds = current batch index
-        # We model t globally (t >= 1)
-        t_global = max(1, self.total_rounds * (self.tmp_rounds + 1))
-        
-        prev_id_matrix = torch.zeros(lora_d, dtype=torch.long, device=device)
-        
-        # Traverse the tree for EACH depth
-        for d in range(lora_d):
-            if self.kd_tree_root is None:
-                # Fallback to standard argmin if tree is not built yet
-                raw_lcb = mu[:, d] - 2 * torch.sqrt(math.log(t_global) / (self.num_of_selected[:task_id, d] + 1e-5))
-                prev_id_matrix[d] = torch.argmin(raw_lcb)
-                continue
-                
-            def compute_lcb(node) -> float:
-                if node.is_leaf:
-                    # For a leaf k in L: LCB_k = \mu_k - 2*sqrt(log(t)/n_k)
-                    best_lcb = float('inf')
-                    for k in node.task_indices:
-                        if k >= task_id: 
-                            continue
-                        n_k = self.num_of_selected[k, d].item()
-                        mu_k = mu[k, d].item()
-                        lcb = mu_k - 2.0 * math.sqrt(math.log(t_global) / max(n_k, 1e-5))
-                        if lcb < best_lcb:
-                            best_lcb = lcb
-                    return best_lcb if best_lcb != float('inf') else 1e9
+        sim[valid_mask] = sim[valid_mask] / self.num_of_selected[:task_id, :][valid_mask]
 
-                # For an internal node:
-                # Equation (2): max { min_{j in C} [ LCB_j - delta ] }
-                # Note: node.median_similarity is the threshold (delta)
-                left_lcb = compute_lcb(node.left) if node.left else float('inf')
-                right_lcb = compute_lcb(node.right) if node.right else float('inf')
-                
-                # Children LCB values adjusted by similarity threshold (delta)
-                delta = node.median_similarity if node.median_similarity is not None else 0.0
-                min_adjusted_child = min(left_lcb - delta, right_lcb - delta)
-                
-                # We return the max constraint exactly as in the LCB conditional formula
-                # However, for minimization descent it acts as a bound
-                return max(min_adjusted_child, -1e9)
-            
-            # Now actually search down the tree to select the leaf with minimum LCB
-            current = self.kd_tree_root
-            while not current.is_leaf:
-                left_val = compute_lcb(current.left) if current.left else float('inf')
-                right_val = compute_lcb(current.right) if current.right else float('inf')
-                
-                if left_val < right_val:
-                    current = current.left
-                else:
-                    current = current.right
-            
-            # Select the exact task index from this leaf
-            best_task, best_lcb = -1, float('inf')
-            for k in current.task_indices:
-                if k >= task_id: continue
-                n_k = self.num_of_selected[k, d].item()
-                mu_k = mu[k, d].item()
-                lcb_val = mu_k - 2.0 * math.sqrt(math.log(t_global) / max(n_k, 1e-5))
-                if lcb_val < best_lcb:
-                    best_lcb = lcb_val
-                    best_task = k
-            
-            if best_task == -1: 
-                best_task = 0 # failsafe
-            prev_id_matrix[d] = best_task
+        # Add LCB exploration bonus (distance minimization form).
+        bonus_scale = math.sqrt(
+            math.log(2 * self.total_rounds * (self.tmp_rounds + 1) * (self.tmp_rounds + 2))
+        )
+        sim -= (
+            (1.0 / torch.sqrt(2 * self.num_of_selected[:task_id, :] + 1e-5))
+            * bonus_scale
+        )
 
-        # Update selection counts
+        # Convert to positive sampling scores.
+        sim = -sim
+        sim += torch.min(sim)
+        sim = sim / (torch.max(sim) - torch.min(sim) + 1e-5)
+
+        # Sample one previous task per depth.
+        sim_normalized = torch.softmax(sim, dim=0)
+        prev_id_matrix = torch.multinomial(
+            sim_normalized.T, num_samples=1, replacement=True
+        ).reshape(-1)
+
+        # Update selection counts.
         self.num_of_selected[prev_id_matrix, torch.arange(lora_d, device=device)] += 1
         self._update_similarity(prev_id_matrix, device)
 
@@ -316,8 +267,8 @@ class KD_LoRA_Tree:
         if self.sim is None:
             return
         for depth_idx, prev_id in enumerate(prev_id_matrix):
-            # Accumulate distance (not negative distance): lower is better.
-            self.sim[prev_id, depth_idx] += torch.sum(
+            # Official-style: accumulate negative L1 distance.
+            self.sim[prev_id, depth_idx] -= torch.sum(
                 torch.abs(
                     self.current_grad[depth_idx]
                     - self.all_grad[prev_id, depth_idx]

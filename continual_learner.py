@@ -108,7 +108,12 @@ class TreeLoRALearner:
         )
 
         # Inject LoRA into Q and V projections of all 12 attention blocks
-        inject_lora_to_vit(self.model, rank=lora_rank, alpha=lora_alpha)
+        inject_lora_to_vit(
+            self.model,
+            rank=lora_rank,
+            alpha=lora_alpha,
+            max_blocks=lora_depth,
+        )
 
         # Move the entire model (including new LoRA parameters) to device
         self.model = self.model.to(self.device)
@@ -162,10 +167,25 @@ class TreeLoRALearner:
         Returns:
             list of parameter tensors, or None if no LoRA-A found
         """
-        params = []
-        for name, param in self.model.named_parameters():
-            if "loranew_A" in name:
-                params.append(param)
+        vit = self.model.vit if hasattr(self.model, "vit") else self.model
+        layerwise = []
+        for block in vit.blocks:
+            attn = block.attn
+            qkv = getattr(attn, "qkv", None)
+            if qkv is None:
+                continue
+            if hasattr(qkv, "loranew_A") and hasattr(qkv, "loranew_A_v"):
+                layerwise.append(
+                    torch.cat(
+                        [qkv.loranew_A.reshape(-1), qkv.loranew_A_v.reshape(-1)],
+                        dim=0,
+                    )
+                )
+
+        if layerwise:
+            return layerwise
+
+        params = [p.reshape(-1) for n, p in self.model.named_parameters() if "loranew_A" in n]
         return params if params else None
 
     # ------------------------------------------------------------------
@@ -375,8 +395,9 @@ class TreeLoRALearner:
                         reg_loss = self.tree.get_loss(
                             _grad_current, loss, task_id, prev_id_matrix
                         )
-                        # Add regularisation loss mapped exactly to the gradient alignment
-                        loss = loss + reg_loss
+                        # Official TreeLoRA implementation uses subtraction here.
+                        # reg_loss is a signed alignment objective returned by the tree.
+                        loss = loss - reg_loss
                 elif self.reg > 0 and task_id == 0:
                     # For first task, still collect gradients but no regularization
                     lora_A_params = self._collect_lora_A_live()

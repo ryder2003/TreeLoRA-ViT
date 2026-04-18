@@ -429,11 +429,10 @@ git push origin main
 
 ## 📖 Documentation
 
-- **Quick Start**: `START_HERE.md`
+- **Project Overview**: `README.md`
 - **SSH Workflow**: `SSH_SERVER_WORKFLOW.md`
-- **Step-by-Step**: `STEP_BY_STEP_GUIDE.md`
+- **Training Commands**: `TRAINING_COMMANDS.md`
 - **Commands**: `COMMANDS_REFERENCE.md` (this file)
-- **Quick Ref**: `QUICK_REFERENCE.md`
 
 ---
 

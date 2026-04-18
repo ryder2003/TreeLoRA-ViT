@@ -78,6 +78,14 @@ def parse_args():
         "--deterministic", action="store_true",
         help="Enable deterministic mode for reproducibility (slower)."
     )
+    p.add_argument(
+        "--mask_seen_classes", action="store_true",
+        help="Optional: mask unseen classes during train/eval (not paper default)."
+    )
+    p.add_argument(
+        "--freeze_old_head_rows", action="store_true",
+        help="Optional: freeze previous classifier rows each task (not paper default)."
+    )
 
     # Device
     p.add_argument("--device", type=str, default=None, help="Device (cuda/cpu)")
@@ -167,6 +175,8 @@ def main():
     print(f"  Tree                : depth={args.lora_depth}  reg={args.reg}")
     print(f"  Seed                : {args.seed}")
     print(f"  Deterministic       : {args.deterministic}")
+    print(f"  Mask seen classes   : {args.mask_seen_classes}")
+    print(f"  Freeze old head rows: {args.freeze_old_head_rows}")
     print(f"  Pretrained          : {not args.no_pretrained}")
     print(f"  Output dir          : {os.path.abspath(args.output_dir)}")
     print(f"{'='*70}\n")
@@ -225,6 +235,8 @@ def main():
         device=device,
         pretrained=not args.no_pretrained,
         output_dir=args.output_dir,
+        mask_seen_classes=args.mask_seen_classes,
+        freeze_old_head_rows=args.freeze_old_head_rows,
     )
 
     if learner.model.head.out_features != total_classes:

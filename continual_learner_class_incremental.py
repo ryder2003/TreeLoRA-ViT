@@ -67,6 +67,8 @@ class ClassIncrementalTreeLoRALearner:
         device: torch.device = None,
         pretrained: bool = True,
         output_dir: str = None,
+        mask_seen_classes: bool = False,
+        freeze_old_head_rows: bool = False,
     ):
         self.num_tasks = num_tasks
         self.total_classes = total_classes
@@ -77,6 +79,8 @@ class ClassIncrementalTreeLoRALearner:
         )
         self.reg = reg
         self.output_dir = output_dir
+        self.mask_seen_classes = mask_seen_classes
+        self.freeze_old_head_rows = freeze_old_head_rows
 
         # ViT-B/16 with UNIFIED head for ALL classes
         self.model = ViTBackbone(
@@ -85,7 +89,12 @@ class ClassIncrementalTreeLoRALearner:
         )
 
         # Inject LoRA
-        inject_lora_to_vit(self.model, rank=lora_rank, alpha=lora_alpha)
+        inject_lora_to_vit(
+            self.model,
+            rank=lora_rank,
+            alpha=lora_alpha,
+            max_blocks=lora_depth,
+        )
         self.model = self.model.to(self.device)
 
         # KD-tree manager
@@ -117,12 +126,58 @@ class ClassIncrementalTreeLoRALearner:
         param_tensors = [p for _, p in params] + list(self.model.head.parameters())
         return torch.optim.Adam(param_tensors, lr=self.lr, betas=(0.9, 0.999), eps=1e-8)
 
+    def _task_class_range(self, task_id: int):
+        """Return [start, end) class indices for task_id."""
+        start = task_id * self.classes_per_task
+        end = min((task_id + 1) * self.classes_per_task, self.total_classes)
+        return start, end
+
+    def _mask_logits_to_seen_classes(self, logits: torch.Tensor, max_seen_task_id: int):
+        """Mask unseen classes so prediction/CE are over seen classes only."""
+        if not self.mask_seen_classes:
+            return logits
+        _, seen_end = self._task_class_range(max_seen_task_id)
+        if seen_end >= self.total_classes:
+            return logits
+        masked = logits.clone()
+        masked[:, seen_end:] = float("-inf")
+        return masked
+
+    def _restrict_head_grads_to_current_task(self, task_id: int):
+        """Update only current-task classifier rows to avoid overwriting old classes."""
+        if not self.freeze_old_head_rows:
+            return
+        start, end = self._task_class_range(task_id)
+        if self.model.head.weight.grad is not None:
+            self.model.head.weight.grad[:start, :] = 0
+            self.model.head.weight.grad[end:, :] = 0
+        if self.model.head.bias is not None and self.model.head.bias.grad is not None:
+            self.model.head.bias.grad[:start] = 0
+            self.model.head.bias.grad[end:] = 0
+
     def _collect_lora_A_live(self):
-        """Collect LoRA-A parameters as live tensors."""
-        params = []
-        for name, param in self.model.named_parameters():
-            if "loranew_A" in name:
-                params.append(param)
+        """Collect one live layer-wise LoRA representation per injected block."""
+        vit = self.model.vit if hasattr(self.model, "vit") else self.model
+        layerwise = []
+        for block in vit.blocks:
+            attn = block.attn
+            qkv = getattr(attn, "qkv", None)
+            if qkv is None:
+                continue
+            if hasattr(qkv, "loranew_A") and hasattr(qkv, "loranew_A_v"):
+                # Layer-wise representation: concatenate Q and V adapter factors.
+                layerwise.append(
+                    torch.cat(
+                        [qkv.loranew_A.reshape(-1), qkv.loranew_A_v.reshape(-1)],
+                        dim=0,
+                    )
+                )
+
+        if layerwise:
+            return layerwise
+
+        # Fallback for unexpected adapter structures.
+        params = [p.reshape(-1) for n, p in self.model.named_parameters() if "loranew_A" in n]
         return params if params else None
 
     def save_checkpoint(self, task_id: int):
@@ -269,10 +324,11 @@ class ClassIncrementalTreeLoRALearner:
 
                 # Forward pass
                 logits = self.model(images)
+                logits_seen = self._mask_logits_to_seen_classes(logits, task_id)
 
                 # Strict class-incremental optimization: single unified head,
                 # global labels, and no task-dependent masking/remapping.
-                loss = criterion(logits, labels)
+                loss = criterion(logits_seen, labels)
 
                 # TreeLoRA regularization
                 if self.reg > 0 and task_id > 0:
@@ -300,6 +356,9 @@ class ClassIncrementalTreeLoRALearner:
 
                 loss.backward()
 
+                # Keep previously learned classifier rows fixed.
+                self._restrict_head_grads_to_current_task(task_id)
+
                 torch.nn.utils.clip_grad_norm_(
                     [p for _, p in get_lora_params(self.model)]
                     + list(self.model.head.parameters()),
@@ -309,7 +368,7 @@ class ClassIncrementalTreeLoRALearner:
                 optimizer.step()
 
                 running_loss += loss.item()
-                preds = logits.argmax(dim=1)  # Use unmasked logits for acc
+                preds = logits_seen.argmax(dim=1)
                 correct += (preds == labels).sum().item()
                 total += labels.size(0)
 
@@ -347,7 +406,7 @@ class ClassIncrementalTreeLoRALearner:
         print(f"  Task {task_id} knowledge merged into base & LoRA zeroed for eval")
 
     @torch.no_grad()
-    def evaluate_task(self, task_id: int, test_loader) -> float:
+    def evaluate_task(self, test_loader, max_seen_task_id: int) -> float:
         """
         Evaluate on a specific task using the unified head.
         
@@ -360,6 +419,7 @@ class ClassIncrementalTreeLoRALearner:
             images = images.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
             logits = self.model(images)
+            logits = self._mask_logits_to_seen_classes(logits, max_seen_task_id)
             preds = logits.argmax(dim=1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
@@ -385,7 +445,7 @@ class ClassIncrementalTreeLoRALearner:
             row = []
             for prev_task_id in range(task_id + 1):
                 _, prev_test_loader = task_dataloaders[prev_task_id]
-                acc = self.evaluate_task(prev_task_id, prev_test_loader)
+                acc = self.evaluate_task(prev_test_loader, max_seen_task_id=task_id)
                 row.append(acc)
                 print(f"  -> Task {prev_task_id} accuracy: {acc:.2f}%")
 

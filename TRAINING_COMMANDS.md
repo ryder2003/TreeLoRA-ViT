@@ -364,10 +364,10 @@ python train.py --dataset cub200 --n_tasks 10 --epochs 10 --batch_size 32 --lr 0
 
 ## 📚 Documentation
 
-- **`IMPLEMENTATION_SUMMARY.md`** - Overview of changes
-- **`PAPER_REPRODUCTION.md`** - Detailed reproduction guide
-- **`CHANGES.md`** - What changed and why
-- **`README.md`** - Original project README
+- **`README.md`** - Project overview and setup
+- **`COMMANDS_REFERENCE.md`** - Full command catalog
+- **`TRAINING_COMMANDS.md`** - Dataset-specific training recipes
+- **`SSH_SERVER_WORKFLOW.md`** - Remote training workflow
 
 ---
 
